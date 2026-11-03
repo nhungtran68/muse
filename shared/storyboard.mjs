@@ -40,7 +40,6 @@ export function validateStoryboard(value,job){
   const marker='PLAN_'+job.id.replaceAll('-','_');
   if(value?.id!==marker||value.schema_version!==2)fail('INVALID_STORYBOARD','Kịch bản thiếu mã yêu cầu hoặc phiên bản hợp lệ.');
   if(!value.analysis||!['topic','message','character','context','purpose'].every(k=>typeof value.analysis[k]==='string'&&value.analysis[k].trim()))fail('MISSING_ANALYSIS','AI phải xác định chủ đề, thông điệp, nhân vật, ngữ cảnh và mục đích.');
-  if(typeof value.outline!=='string'||value.outline.trim().length<10)fail('MISSING_OUTLINE','AI chưa phác thảo trình tự kịch bản.');
   if(!Array.isArray(value.scenes)||value.scenes.length!==job.scene_count)fail('SCENE_COUNT','Số đoạn kịch bản chưa đúng số cảnh đã chọn.');
   const seen=new Set(),raw=sourceText(job.content),quantities=new Set((job.content.match(/\d+(?:[.,]\d+)?\s*%?/g)||[]).map(x=>x.trim()));
   const scenes=value.scenes.map((scene,i)=>{
@@ -58,7 +57,11 @@ export function validateStoryboard(value,job){
     for(const claim of ['chữa khỏi','điều trị','cam kết','bảo hành','hiệu quả tuyệt đối'])if(sourceText(dialogue).includes(claim)&&!raw.includes(claim))fail('INVENTED_CLAIM',`Cảnh ${i+1}: có công dụng hoặc cam kết ngoài nội dung gốc.`);
     return {index:i+1,prompt:scene.prompt.trim(),dialogue,seconds:job.scene_seconds,action,source_quotes:scene.source_quotes,speech};
   });
-  return {id:marker,schema_version:2,analysis:value.analysis,outline:value.outline.trim(),warnings:Array.isArray(value.warnings)?value.warnings.map(String):[],scenes};
+  const proposedOutline=typeof value.outline==='string'?value.outline.trim():Array.isArray(value.outline)&&value.outline.every(line=>typeof line==='string')?value.outline.join('\n').trim():'';
+  // Ordered, validated scenes already contain the script. Summarize those exact
+  // lines if Muse omits the presentation-only outline; do not invent new facts.
+  const outline=proposedOutline.length>=10?proposedOutline:scenes.map(scene=>`Cảnh ${scene.index}: ${scene.dialogue}`).join('\n');
+  return {id:marker,schema_version:2,analysis:value.analysis,outline,warnings:Array.isArray(value.warnings)?value.warnings.map(String):[],scenes};
 }
 export function checkTranscript(expected,transcript,words,seconds){
   const a=normalizeSpeech(expected).split(' ').filter(Boolean),b=normalizeSpeech(transcript).split(' ').filter(Boolean);

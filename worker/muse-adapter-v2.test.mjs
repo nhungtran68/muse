@@ -92,3 +92,16 @@ test('matches only the reply to the user request, even if Muse repeats the key o
   await page.setContent(assistant('ONE. Create a video') + '<textarea>ONE. Create a video</textarea>');
   assert.equal((await adapter.sceneResponse('ONE')).requested, false);
 });
+
+test('storyboard reads only the assistant reply and never parses a repeated user JSON example',async t=>{
+  const browser=await chromium.launch({headless:true,...(installedBrowserExecutable()?{executablePath:installedBrowserExecutable()}:{})});
+  t.after(()=>browser.close());const page=await browser.newPage({offline:true});
+  const adapter=new MuseAdapterV2('','');adapter.requirePage=()=>page;
+  const marker='PLAN_JOB_T2_A0',example=JSON.stringify({id:marker,outline:'...'});
+  const user=`<div class="hatch-chat-groupable-bubble bg-chat-user-bubble"><p>${example}</p></div>`;
+  await page.setContent(user+'<div class="hatch-chat-groupable-bubble">Previous unrelated reply</div>'+user);
+  assert.equal(await adapter.storyboardResponse(marker),'');
+  const reply=JSON.stringify({id:marker,outline:['First scene','Second scene']});
+  await page.locator('body').evaluate((body,text)=>{const message=document.createElement('div');message.className='hatch-chat-groupable-bubble';message.textContent=text;body.append(message);},reply);
+  assert.equal(await adapter.storyboardResponse(marker),reply);
+});

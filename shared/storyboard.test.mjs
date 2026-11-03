@@ -36,3 +36,12 @@ test('extracts matching JSON despite unrelated text',()=>{
   assert.deepEqual(parseMarkedJson(input,data.id),data);
   assert.equal(parseMarkedJson(input,'other'),null);
 });
+
+test('accepts an outline array or derives it only from validated scene dialogue',()=>{
+  const array=fixture();array.outline=['Giới thiệu giàn nho','Mời ghé thăm vườn'];
+  assert.equal(validateStoryboard(array,job).outline,array.outline.join('\n'));
+  const missing=fixture();delete missing.outline;
+  assert.equal(validateStoryboard(missing,job).outline,missing.scenes.map(scene=>`Cảnh ${scene.index}: ${scene.dialogue}`).join('\n'));
+  missing.scenes[0].dialogue='Nho.';
+  assert.throws(()=>validateStoryboard(missing,job),{code:'SPEECH_TOO_SHORT'});
+});
