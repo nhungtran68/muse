@@ -1,8 +1,8 @@
-import {mkdir,rename,stat,unlink,open} from 'node:fs/promises';
+import {mkdir,rename,stat,unlink,open,readFile,writeFile} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
 import path from 'node:path';
 
-function installedBrowserExecutable(){
+export function installedBrowserExecutable(){
   if(process.platform!=='win32')return null;
   const candidates=[
     path.join(process.env.PROGRAMFILES||'C:\\Program Files','Google','Chrome','Application','chrome.exe'),
@@ -41,7 +41,9 @@ export function parseScenePlan(text,jobId,count) {
 }
 
 export class MuseAdapter {
-  constructor(profileDir,downloadsDir){this.profileDir=profileDir;this.downloadsDir=downloadsDir;}
+  constructor(profileDir,downloadsDir,{sceneTimeoutMs=13*60*1000,pollMs=3000,composerTimeoutMs=30000}={}){
+    Object.assign(this,{profileDir,downloadsDir,sceneTimeoutMs,pollMs,composerTimeoutMs});
+  }
   async open(){
     if(this.page&&!this.page.isClosed())return this.page;
     const {chromium}=await import('playwright');
@@ -61,21 +63,26 @@ export class MuseAdapter {
     if(!this.page||this.page.isClosed()||new URL(this.page.url()).hostname!=='muse.ai')throw Error('Cửa sổ Muse không sẵn sàng.');
     return this.page;
   }
+  composer(){return this.requirePage().getByRole('textbox',{name:/^(Nh\u1eafn tin|Message)$/i});}
+  preview(){return this.requirePage().getByRole('dialog',{name:/Xem tr\u01b0\u1edbc file ph\u01b0\u01a1ng ti\u1ec7n|Media preview/i});}
+  async closePreview(){
+    const p=this.requirePage(),preview=this.preview();
+    if(!await preview.isVisible().catch(()=>false))return;
+    await p.keyboard.press('Escape');
+    if(await preview.isVisible().catch(()=>false)){
+      const close=preview.getByRole('button',{name:/^(\u0110\u00f3ng|Close|Dismiss)(?:\s|$)/i});
+      if(await close.count()===1)await close.click();
+    }
+    await preview.waitFor({state:'hidden',timeout:this.composerTimeoutMs});
+  }
   async cleanComposer(){
     const p=this.requirePage();
-    let composer=p.getByRole('textbox',{name:/^(Nh\u1eafn tin|Message)$/i});
-    if(await composer.count()!==1||!await composer.isVisible().catch(()=>false)){
-      await p.keyboard.press('Escape').catch(()=>{});
-      composer=p.getByRole('textbox',{name:/^(Nh\u1eafn tin|Message)$/i});
-      if(await composer.count()!==1||!await composer.isVisible().catch(()=>false)){
-        await p.goto('https://muse.ai/',{waitUntil:'domcontentloaded'});
-      }
-    }
-    const preview=p.getByRole('dialog',{name:/Xem trước file phương tiện|Media preview/i});
-    if(await preview.isVisible().catch(()=>false))await preview.getByRole('button',{name:/^(Đóng|Close)$/i}).click();
-    if(await p.getByRole('button',{name:/^(Dừng nhiệm vụ|Stop task)$/i}).count())throw Error('Muse đang làm tác vụ khác.');
-    const input=p.getByRole('textbox',{name:/^(Nhắn tin|Message)$/i});
-    if(await input.count()!==1||!await input.isVisible())throw Error('Không thấy ô chat Muse.');
+    await this.closePreview();
+    const input=this.composer();
+    // Muse remounts the composer after closing media; keep the current conversation.
+    try{await input.waitFor({state:'visible',timeout:this.composerTimeoutMs});}
+    catch{throw Error('Không thấy ô chat Muse sau khi chờ giao diện sẵn sàng. Giữ nguyên cuộc chat để tiếp tục cảnh.');}
+    await p.getByRole('button',{name:/^(D\u1eebng nhi\u1ec7m v\u1ee5|Stop task)$/i}).waitFor({state:'hidden',timeout:this.composerTimeoutMs});
     const draft=await input.evaluate(element=>'value' in element?element.value:element.textContent||'');
     if(draft.trim())throw Error('Ô chat Muse còn bản nháp; hãy xử lý trước.');
     return input;
@@ -115,8 +122,8 @@ export class MuseAdapter {
   }
   async downloadScene(fileId){
     const p=this.requirePage();
-    const dialog=p.getByRole('dialog',{name:/Xem trước file phương tiện|Media preview/i});
-    if(!await dialog.isVisible())throw Error('Không thấy cửa sổ video mới.');
+    const dialog=this.preview();
+    await dialog.waitFor({state:'visible',timeout:30000});
     const video=dialog.locator('video');if(await video.count()!==1)throw Error('Không xác định được video duy nhất.');
     const metadata=await video.evaluate(element=>({duration:element.duration,width:element.videoWidth,height:element.videoHeight}));
     await mkdir(this.downloadsDir,{recursive:true});
@@ -130,24 +137,77 @@ export class MuseAdapter {
       const handle=await open(temp,'r'),header=Buffer.alloc(64);try{await handle.read(header,0,64,0);}finally{await handle.close();}
       if(!header.includes(Buffer.from('ftyp')))throw Error('File tải về không phải MP4.');
       await rename(temp,target);
-      await p.keyboard.press('Escape').catch(()=>{});
-      await dialog.waitFor({state:'hidden',timeout:2500}).catch(()=>{});
+      await this.closePreview();
       return {path:target,...metadata};
     }catch(error){await unlink(temp).catch(()=>{});throw error;}
   }
-  async generateScene(job,scene,imagePath){
-    const p=this.requirePage(),input=await this.cleanComposer();
-    const resultButtons=p.getByRole('button',{name:/^(Mở video có hoạt ảnh|Open animated video)/i});
-    const previous=await resultButtons.count();
-    await this.attachReference(imagePath);
-    await input.fill(`Cảnh ${scene.index}/${job.scene_count} của video thương hiệu ${job.id}. Dùng ẢNH ĐÍNH KÈM làm tham chiếu cho chủ thể, màu sắc và phong cách. Tạo đúng một video ${job.scene_seconds} giây, khổ dọc 9:16. Không dùng dữ liệu cũ ngoài ảnh này. Không chèn chữ, không đăng lên mạng xã hội. Nếu không hỗ trợ ảnh hoặc thời lượng, hãy báo lỗi, không tự đổi yêu cầu. Trả file MP4. Mô tả cảnh: ${scene.prompt}`);
-    await input.press('Enter');
-    const until=Date.now()+13*60*1000;
+  async sceneResponse(requestKey){
+    const p=this.requirePage();
+    const buttons=p.getByRole('button',{name:/^(M\u1edf|Xem) video\b|^(Open|View|Play) (?:animated )?video\b/i});
+    const elements=await buttons.elementHandles();
+    const state=await p.evaluateHandle(({elements,key})=>{
+      // Match outputs after this request, regardless of how many old cards remain mounted.
+      const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+      let node,anchor=null;
+      while((node=walker.nextNode())){
+        if(node.textContent.includes(key)&&!node.parentElement.closest('textarea,input,[contenteditable="true"],[role="textbox"],script,style'))anchor=node.parentElement;
+      }
+      const video=anchor?elements.find(element=>element.isConnected&&!element.closest('[role="dialog"]')&&Boolean(anchor.compareDocumentPosition(element)&Node.DOCUMENT_POSITION_FOLLOWING)):null;
+      return {requested:Boolean(anchor),video:video||null};
+    },{elements,key:requestKey});
+    await Promise.all(elements.map(element=>element.dispose()));
+    const requestedHandle=await state.getProperty('requested');
+    const requested=await requestedHandle.jsonValue();await requestedHandle.dispose();
+    const videoHandle=await state.getProperty('video'),video=videoHandle.asElement();
+    if(!video)await videoHandle.dispose();
+    await state.dispose();
+    return {requested,video};
+  }
+  async generateScene(job,scene,imagePath,{resumeOnly=false}={}){
+    const p=this.requirePage();
+    const requestKey=`Cảnh ${scene.index}/${job.scene_count} của video thương hiệu ${job.id}.`;
+    const receiptFile=path.join(this.downloadsDir,job.id,`request-${scene.index}.json`);
+    let receipt=null;
+    try{receipt=JSON.parse(await readFile(receiptFile,'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
+    if(receipt){
+      const url=new URL(receipt.url);
+      if(url.protocol!=='https:'||url.hostname!=='muse.ai')throw Error('Địa chỉ cuộc chat đã lưu không hợp lệ.');
+      if(p.url()!==url.href)await p.goto(url.href,{waitUntil:'domcontentloaded'});
+    }
+    await this.closePreview();
+    await this.composer().waitFor({state:'visible',timeout:this.composerTimeoutMs});
+    let response=await this.sceneResponse(requestKey);
+    if(!response.requested){
+      if(receipt||resumeOnly)throw Error(`Không thấy yêu cầu cảnh ${scene.index} đã gửi trong cuộc chat Muse. Mở lại đúng cuộc chat rồi tiếp tục; worker chưa gửi lại yêu cầu.`);
+      const input=await this.cleanComposer();
+      await this.attachReference(imagePath);
+      await input.fill(`${requestKey} Dùng ẢNH ĐÍNH KÈM làm tham chiếu cho chủ thể, màu sắc và phong cách. Tạo đúng một video ${job.scene_seconds} giây, khổ dọc 9:16. Không dùng dữ liệu cũ ngoài ảnh này. Không chèn chữ, không đăng lên mạng xã hội. Nếu không hỗ trợ ảnh hoặc thời lượng, hãy báo lại, không tự đổi yêu cầu. Trả file MP4. Mô tả cảnh: ${scene.prompt}`);
+      // Save before Enter so an interrupted worker cannot silently submit twice.
+      receipt={url:p.url(),requestKey,sentAt:new Date().toISOString()};
+      await mkdir(path.dirname(receiptFile),{recursive:true});
+      await writeFile(receiptFile,JSON.stringify(receipt));
+      await input.press('Enter');
+      console.log(`Cảnh ${scene.index}/${job.scene_count}: đã gửi, đang chờ video của đúng cảnh.`);
+    }else{
+      console.log(`Cảnh ${scene.index}/${job.scene_count}: tiếp tục nhận kết quả yêu cầu đã gửi.`);
+    }
+    const until=Date.now()+this.sceneTimeoutMs;
     while(Date.now()<until){
       if(p.isClosed())throw Error('Cửa sổ Muse đã đóng giữa chừng.');
-      if(await resultButtons.count()>previous){await resultButtons.last().click();return this.downloadScene(`${job.id}-${scene.index}`);}
-      await new Promise(resolve=>setTimeout(resolve,3000));
+      if(receipt&&receipt.url!==p.url()){
+        receipt.url=p.url();await writeFile(receiptFile,JSON.stringify(receipt));
+      }
+      if(response.video){
+        try{
+          await response.video.click();
+          console.log(`Cảnh ${scene.index}/${job.scene_count}: đã nhận video, đang tải MP4.`);
+          return await this.downloadScene(`${job.id}-${scene.index}`);
+        }finally{await response.video.dispose();}
+      }
+      await new Promise(resolve=>setTimeout(resolve,this.pollMs));
+      response=await this.sceneResponse(requestKey);
     }
-    throw Error('Chưa thấy MP4 của cảnh sau 13 phút. Kiểm tra Muse; không tự gửi lại.');
+    if(response.video)await response.video.dispose();
+    throw Error(`Chưa nhận được MP4 cho cảnh ${scene.index} sau ${Math.round(this.sceneTimeoutMs/60000)} phút. Yêu cầu đã gửi được giữ lại để tiếp tục, không tự tạo trùng.`);
   }
 }

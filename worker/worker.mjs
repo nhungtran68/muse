@@ -1,5 +1,5 @@
 import {createClient} from '@supabase/supabase-js';
-import {mkdirSync,readFileSync,writeFileSync,unlinkSync} from 'node:fs';
+import {mkdirSync,readFileSync,writeFileSync,unlinkSync,existsSync,appendFileSync} from 'node:fs';
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -81,12 +81,12 @@ export async function processBrandJob(job,{client=supabase,muse=adapter,workRoot
     plan=await muse.planScenes(job,imagePath);
     const planned=await client.from('brand_jobs').update({plan,status:'generating',error:null,updated_at:new Date().toISOString()}).eq('id',job.id);
     if(planned.error)throw planned.error;
-    const rows=plan.map(scene=>({job_id:job.id,scene_index:scene.index,prompt:scene.prompt,status:'waiting'}));
-    const inserted=await client.from('brand_scenes').upsert(rows,{onConflict:'job_id,scene_index'});if(inserted.error)throw inserted.error;
   }else{
     const resumed=await client.from('brand_jobs').update({status:'generating',error:null,updated_at:new Date().toISOString()}).eq('id',job.id);
     if(resumed.error)throw resumed.error;
   }
+  const rows=plan.map(scene=>({job_id:job.id,scene_index:scene.index,prompt:scene.prompt,status:'waiting'}));
+  const inserted=await client.from('brand_scenes').upsert(rows,{onConflict:'job_id,scene_index',ignoreDuplicates:true});if(inserted.error)throw inserted.error;
   const savedResult=await client.from('brand_scenes').select('scene_index,status,output_path').eq('job_id',job.id);
   if(savedResult.error)throw savedResult.error;
   const savedScenes=new Map(savedResult.data.map(scene=>[scene.scene_index,scene]));
@@ -103,10 +103,12 @@ export async function processBrandJob(job,{client=supabase,muse=adapter,workRoot
       continue;
     }
     const marked=await client.from('brand_scenes').update({status:'generating'}).eq('job_id',job.id).eq('scene_index',scene.index);if(marked.error)throw marked.error;
-    const output=await muse.generateScene(job,scene,imagePath);
+    const cachedPath=path.join(workRoot,`${job.id}-${scene.index}.mp4`);
+    console.log(`Cảnh ${scene.index}/${job.scene_count}: ${existsSync(cachedPath)?'đọc MP4 đã tải':'nhận video từ Muse'}.`);
+    const output=existsSync(cachedPath)?{path:cachedPath}:await muse.generateScene(job,scene,imagePath,{resumeOnly:saved?.status==='generating'});
     const meta=await probeVideo(output.path);validateScene(meta,job.scene_seconds);
     const storagePath=`${job.user_id}/${job.id}/scenes/${String(scene.index).padStart(2,'0')}.mp4`;
-    const uploaded=await client.storage.from('brand-videos').upload(storagePath,await readFile(output.path),{contentType:'video/mp4',upsert:false});
+    const uploaded=await client.storage.from('brand-videos').upload(storagePath,await readFile(output.path),{contentType:'video/mp4',upsert:true});
     if(uploaded.error)throw uploaded.error;
     const completed=await client.from('brand_scenes').update({status:'done',output_path:storagePath,duration:meta.duration}).eq('job_id',job.id).eq('scene_index',scene.index);if(completed.error)throw completed.error;
     const progress=await client.from('brand_jobs').update({current_scene:scene.index,updated_at:new Date().toISOString()}).eq('id',job.id);if(progress.error)throw progress.error;
@@ -117,20 +119,26 @@ export async function processBrandJob(job,{client=supabase,muse=adapter,workRoot
   const finalFile=path.join(jobDir,'final.mp4');
   await joinScenes(paths,finalFile,job.scene_count*job.scene_seconds);
   const finalPath=`${job.user_id}/${job.id}/final.mp4`;
-  const finalUpload=await client.storage.from('brand-videos').upload(finalPath,await readFile(finalFile),{contentType:'video/mp4',upsert:false});if(finalUpload.error)throw finalUpload.error;
+  const finalUpload=await client.storage.from('brand-videos').upload(finalPath,await readFile(finalFile),{contentType:'video/mp4',upsert:true});if(finalUpload.error)throw finalUpload.error;
   const done=await client.from('brand_jobs').update({status:'done',final_path:finalPath,error:null,updated_at:new Date().toISOString()}).eq('id',job.id);if(done.error)throw done.error;
   return finalPath;
 }
 
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   try{
+    for(const method of ['log','error']){
+      const original=console[method].bind(console);
+      console[method]=(...args)=>{original(...args);try{appendFileSync(path.join(dataDir,'worker.log'),`${new Date().toISOString()} ${args.join(' ')}\n`);}catch{}};
+    }
+    console.log(`Muse Brand Worker v${JSON.parse(readFileSync(path.join(base,'package.json'),'utf8')).version} — ${base}`);
     await adminLogin();await adapter.waitForLogin();
     const recovered=await supabase.rpc('recover_orphaned_brand_jobs');
     if(recovered.error)throw recovered.error;
     console.log('Worker đã sẵn sàng. Giữ cửa sổ Muse và cửa sổ này mở.');
-    let lastHeartbeat=0;
+    await heartbeat();
+    const heartbeatTimer=setInterval(()=>{void heartbeat().catch(error=>console.error(error.message));},30000);
+    heartbeatTimer.unref();
     while(true){
-      if(Date.now()-lastHeartbeat>30000){await heartbeat();lastHeartbeat=Date.now();}
       const claim=await supabase.rpc('claim_next_brand_job');
       if(claim.error){console.error('Không lấy được hàng đợi:',claim.error.message);await sleep(10000);continue;}
       if(!claim.data?.id){await sleep(5000);continue;}
