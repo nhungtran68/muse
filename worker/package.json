@@ -1,10 +1,10 @@
 {
   "name": "muse-brand-worker",
   "private": true,
-  "version": "1.5.2",
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
-    "start": "node worker.mjs",
+    "start": "node worker-v2.mjs",
     "test": "node --test"
   },
   "dependencies": {

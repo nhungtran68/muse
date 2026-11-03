@@ -21,6 +21,11 @@ export async function probeVideo(file) {
   return {duration:Number(data.format?.duration),width:video?.width,height:video?.height,codec:video?.codec_name};
 }
 
+export async function checkMediaToolsAvailable() {
+  try { await Promise.all([run('ffmpeg',['-version']),run('ffprobe',['-version'])]); }
+  catch { throw Error('Thiếu FFmpeg hoặc ffprobe. Hãy cài cả hai và mở lại cửa sổ worker.'); }
+}
+
 export function validateScene(meta,seconds) {
   if(!Number.isFinite(meta.duration)||Math.abs(meta.duration-seconds)>.6)throw Error(`Video sai thời lượng: ${meta.duration} thay vì ${seconds} giây.`);
   if(!meta.width||!meta.height||Math.abs(meta.width/meta.height-9/16)>.025)throw Error(`Video không đúng khổ dọc 9:16: ${meta.width}x${meta.height}.`);

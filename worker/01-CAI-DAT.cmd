@@ -16,7 +16,7 @@ if errorlevel 1 (
   goto :end
 )
 echo Dang cai thu vien cho worker...
-call npm.cmd install
+call npm.cmd ci
 if errorlevel 1 (
   echo Cai thu vien that bai. Xem thong bao loi o phia tren.
   goto :end

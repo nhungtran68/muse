@@ -6,6 +6,7 @@ import {adminLoginV2} from './login-v2.mjs';
 import {publishableKey,supabaseUrl} from './config.js';
 import {MuseAdapterV2} from './muse-adapter-v2.mjs';
 import {SpeechAuditor} from './speech-audit.mjs';
+import {checkMediaToolsAvailable} from './ffmpeg.mjs';
 import {failBrandJobV2,processBrandJobV2} from './workflow-v2.mjs';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -23,7 +24,7 @@ async function renew(){
   finally{renewing=false;}
 }
 try{
-  await auditor.checkAvailable();await adminLoginV2(supabase);await muse.waitForLogin();
+  await checkMediaToolsAvailable();await auditor.checkAvailable();await adminLoginV2(supabase);await muse.waitForLogin();
   if(process.argv.includes('--diagnose'))console.log('MUSE_CHECK_OK');
   else{
     while(!token){const lease=await call('acquire_muse_worker',{p_worker:workerId});token=lease?.token||null;if(!token){console.log('Worker khác đang hoạt động; chờ đến lượt.');await sleep(10000);}}
