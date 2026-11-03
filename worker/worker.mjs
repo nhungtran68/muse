@@ -76,13 +76,32 @@ export async function processBrandJob(job,{client=supabase,muse=adapter,workRoot
   if(downloaded.error)throw downloaded.error;
   const bytes=Buffer.from(await downloaded.data.arrayBuffer()),ext=checkImage(bytes);
   const imagePath=path.join(jobDir,'reference.'+ext);await writeFile(imagePath,bytes);
-  const plan=await muse.planScenes(job,imagePath);
-  const planned=await client.from('brand_jobs').update({plan,status:'generating',updated_at:new Date().toISOString()}).eq('id',job.id);
-  if(planned.error)throw planned.error;
-  const rows=plan.map(scene=>({job_id:job.id,scene_index:scene.index,prompt:scene.prompt,status:'waiting'}));
-  const inserted=await client.from('brand_scenes').insert(rows);if(inserted.error)throw inserted.error;
+  let plan=Array.isArray(job.plan)&&job.plan.length===job.scene_count?job.plan:null;
+  if(!plan){
+    plan=await muse.planScenes(job,imagePath);
+    const planned=await client.from('brand_jobs').update({plan,status:'generating',error:null,updated_at:new Date().toISOString()}).eq('id',job.id);
+    if(planned.error)throw planned.error;
+    const rows=plan.map(scene=>({job_id:job.id,scene_index:scene.index,prompt:scene.prompt,status:'waiting'}));
+    const inserted=await client.from('brand_scenes').upsert(rows,{onConflict:'job_id,scene_index'});if(inserted.error)throw inserted.error;
+  }else{
+    const resumed=await client.from('brand_jobs').update({status:'generating',error:null,updated_at:new Date().toISOString()}).eq('id',job.id);
+    if(resumed.error)throw resumed.error;
+  }
+  const savedResult=await client.from('brand_scenes').select('scene_index,status,output_path').eq('job_id',job.id);
+  if(savedResult.error)throw savedResult.error;
+  const savedScenes=new Map(savedResult.data.map(scene=>[scene.scene_index,scene]));
   const paths=[];
   for(const scene of plan){
+    const saved=savedScenes.get(scene.index);
+    if(saved?.status==='done'&&saved.output_path){
+      const stored=await client.storage.from('brand-videos').download(saved.output_path);
+      if(stored.error)throw stored.error;
+      const localPath=path.join(jobDir,`scene-${String(scene.index).padStart(2,'0')}.mp4`);
+      await writeFile(localPath,Buffer.from(await stored.data.arrayBuffer()));
+      const meta=await probeVideo(localPath);validateScene(meta,job.scene_seconds);
+      paths.push(localPath);
+      continue;
+    }
     const marked=await client.from('brand_scenes').update({status:'generating'}).eq('job_id',job.id).eq('scene_index',scene.index);if(marked.error)throw marked.error;
     const output=await muse.generateScene(job,scene,imagePath);
     const meta=await probeVideo(output.path);validateScene(meta,job.scene_seconds);

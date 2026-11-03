@@ -63,6 +63,14 @@ export class MuseAdapter {
   }
   async cleanComposer(){
     const p=this.requirePage();
+    let composer=p.getByRole('textbox',{name:/^(Nh\u1eafn tin|Message)$/i});
+    if(await composer.count()!==1||!await composer.isVisible().catch(()=>false)){
+      await p.keyboard.press('Escape').catch(()=>{});
+      composer=p.getByRole('textbox',{name:/^(Nh\u1eafn tin|Message)$/i});
+      if(await composer.count()!==1||!await composer.isVisible().catch(()=>false)){
+        await p.goto('https://muse.ai/',{waitUntil:'domcontentloaded'});
+      }
+    }
     const preview=p.getByRole('dialog',{name:/Xem trước file phương tiện|Media preview/i});
     if(await preview.isVisible().catch(()=>false))await preview.getByRole('button',{name:/^(Đóng|Close)$/i}).click();
     if(await p.getByRole('button',{name:/^(Dừng nhiệm vụ|Stop task)$/i}).count())throw Error('Muse đang làm tác vụ khác.');
@@ -121,7 +129,10 @@ export class MuseAdapter {
       if((await stat(temp)).size<1024)throw Error('MP4 tải về quá nhỏ.');
       const handle=await open(temp,'r'),header=Buffer.alloc(64);try{await handle.read(header,0,64,0);}finally{await handle.close();}
       if(!header.includes(Buffer.from('ftyp')))throw Error('File tải về không phải MP4.');
-      await rename(temp,target);return {path:target,...metadata};
+      await rename(temp,target);
+      await p.keyboard.press('Escape').catch(()=>{});
+      await dialog.waitFor({state:'hidden',timeout:2500}).catch(()=>{});
+      return {path:target,...metadata};
     }catch(error){await unlink(temp).catch(()=>{});throw error;}
   }
   async generateScene(job,scene,imagePath){
