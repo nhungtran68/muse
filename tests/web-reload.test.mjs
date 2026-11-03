@@ -24,6 +24,7 @@ test('a member reloads while a job is processing; another member sees only their
    if(url.origin===`http://127.0.0.1:${port}`)return route.continue();
    if(url.origin!==api)return route.abort();
    if(request.method()==='OPTIONS')return route.fulfill(json({}));
+   if(url.pathname==='/auth/v1/logout')return route.fulfill(json({}));
    if(url.pathname==='/auth/v1/token'){
     active=request.postDataJSON().email;const user={id:ids[active],email:active,aud:'authenticated',role:'authenticated'};
     return route.fulfill(json({access_token:token(user.id),refresh_token:'test-refresh',token_type:'bearer',expires_in:3600,expires_at:Math.floor(Date.now()/1000)+3600,user}));
@@ -45,4 +46,22 @@ test('a member reloads while a job is processing; another member sees only their
   assert.match(await page.locator('#jobs-list').innerText(),/Đang xử lý/);
   const other=Object.keys(ids).find(item=>item!==email);assert.doesNotMatch(await page.locator('#jobs-list').innerText(),new RegExp(other));
  }
+ // A history response from the previous login must never enter the new user's DOM.
+ const context=sessions[0],page=context.pages()[0];
+ let release,seen;
+ const delayed=new Promise(resolve=>{release=resolve;}),started=new Promise(resolve=>{seen=resolve;});
+ await context.route(api+'/rest/v1/brand_jobs?**',async route=>{
+  const url=new URL(route.request().url());
+  if(url.searchParams.get('user_id')!==`eq.${ids['one@example.test']}`)return route.fallback();
+  seen();await delayed;
+  return route.fulfill(json([{id:'aaaaaaaa-0000-4000-8000-000000000001',user_id:ids['one@example.test'],content:'Nội dung riêng one@example.test',scene_count:1,scene_seconds:10,status:'queued',created_at:'2026-11-03T00:00:00Z',brand_scenes:[]}]));
+ });
+ await page.reload();await started;
+ await page.locator('#signout').click();
+ await page.locator('#auth-email').fill('two@example.test');await page.locator('#auth-password').fill('local-test-password-123');await page.locator('#auth-form button[type=submit]').click();
+ await page.locator('#jobs-list').getByText('Nội dung riêng two@example.test').waitFor({timeout:20000});
+ const delivered=page.waitForResponse(response=>response.url().includes('user_id=eq.'+ids['one@example.test']));
+ release();await delivered;await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ assert.doesNotMatch(await page.locator('#jobs-list').innerText(),/one@example.test/);
+ assert.match(await page.locator('#jobs-list').innerText(),/two@example.test/);
 });

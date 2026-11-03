@@ -48,7 +48,7 @@ export function validateStoryboard(value,job){
     if(typeof scene.prompt!=='string'||scene.prompt.trim().length<20||scene.prompt.length>1600)fail('INVALID_PROMPT','Prompt cảnh phải mô tả rõ hình ảnh và chuyển động.');
     if(typeof scene.dialogue!=='string'||scene.dialogue.length>600)fail('INVALID_DIALOGUE','Mỗi cảnh cần có lời thoại riêng dạng văn bản.');
     const dialogue=scene.dialogue.trim(),action=String(scene.action||'').trim(),speech=estimateSpeech(dialogue,job.scene_seconds),normalized=normalizeSpeech(dialogue);
-    if(!normalized||speech.estimated_seconds<job.scene_seconds*.40)fail('SPEECH_TOO_SHORT',`Cảnh ${i+1}: lời thoại quá ngắn so với mode ${job.scene_seconds} giây. Hãy phân bổ lại nội dung tự nhiên; nếu thông tin không đủ, cần bổ sung nội dung hoặc giảm số cảnh.`);
+    if(!normalized||speech.estimated_seconds<job.scene_seconds*.50)fail('SPEECH_TOO_SHORT',`Cảnh ${i+1}: lời thoại quá ngắn so với mode ${job.scene_seconds} giây. Hãy phân bổ lại nội dung tự nhiên; nếu thông tin không đủ, cần bổ sung nội dung hoặc giảm số cảnh.`);
     if(speech.estimated_seconds>job.scene_seconds-.35)fail('SPEECH_TOO_LONG',`Cảnh ${i+1}: lời thoại khoảng ${speech.estimated_seconds} giây, dài hơn khoảng đọc cho mode ${job.scene_seconds} giây. Viết lại tự nhiên trong ${speech.target_min_units}-${speech.target_max_units} tiếng.`);
     if(speech.estimated_seconds<job.scene_seconds*.5&&action.length<25)fail('EMPTY_SCENE',`Cảnh ${i+1}: thoại ngắn phải có hành động hoặc biểu cảm có ý nghĩa để cảnh không trống.`);
     if(normalized&&seen.has(normalized))fail('REPEATED_DIALOGUE','Không lặp lại nguyên câu thoại giữa các cảnh.');
@@ -69,6 +69,6 @@ export function checkTranscript(expected,transcript,words,seconds){
   const start=spoken[0]?.start??null,end=spoken.at(-1)?.end??null;
   const tail=a.slice(-Math.min(3,a.length)).join(' '),hasTail=normalizeSpeech(transcript).includes(tail);
   const inTime=start!==null&&start>=0&&end<=seconds-.10;
-  const spokenSeconds=start===null?0:Math.round((end-start)*100)/100,tooShort=spokenSeconds<seconds*.40;
+  const spokenSeconds=start===null?0:Math.round((end-start)*100)/100,tooShort=spokenSeconds<seconds*.60;
   return {ok:wer<=.25&&hasTail&&inTime&&!tooShort,word_error_rate:Math.round(wer*1000)/1000,spoken_start:start,spoken_end:end,spoken_seconds:spokenSeconds,tail_present:hasTail,reason:!inTime?'SPEECH_TIMING':!hasTail?'CUT_OFF_SPEECH':wer>.25?'SPEECH_MISMATCH':tooShort?'SPEECH_TOO_SHORT':null};
 }

@@ -53,9 +53,9 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
       if(Math.abs(meta.duration-job.scene_seconds)>.4)throw Object.assign(Error(`Cảnh ${scene.index} sai thời lượng yêu cầu.`),{code:'SCENE_DURATION_MISMATCH',retryable:false});
       const audit=await auditor.verify(file,scene,job.scene_seconds);
       if(!audit.ok){
-        const retryable=generation<2;
+        const retryable=generation<2&&(job.attempt??0)<(job.max_attempts??3);
         const detail=`Cảnh ${scene.index}: lời thoại không khớp hoặc chưa được đọc hết (${audit.reason}).`;
-        if(retryable)await updateScene(scene.index,{status:'error',generation:generation+1,submission_state:'not_sent',request_receipt:null,error_code:audit.reason||'SPEECH_UNVERIFIED',error:detail});
+        await updateScene(scene.index,{status:'error',...(retryable?{generation:generation+1,submission_state:'not_sent',request_receipt:null}:{}),speech_audit:audit,error_code:audit.reason||'SPEECH_UNVERIFIED',error:detail});
         throw Object.assign(Error(retryable?detail+' Có thể thử tạo lại cảnh này.':detail+' Cần quản trị viên kiểm tra.'),{code:audit.reason||'SPEECH_UNVERIFIED',retryable});
       }
       const data=await readFile(file),fingerprint=sha256(data);
@@ -83,5 +83,5 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
 
 export async function failBrandJobV2(job,error,{client,workerId,leaseToken}){
   const message=String(error?.message||'Không thể tạo video.').split('\n')[0].slice(0,400);
-  return rpc(client,'update_brand_job_v2',{p_id:job.id,p_worker:workerId,p_token:leaseToken,p_claim:job.claim_token,p_patch:{status:'error',error:message,error_code:error?.code||'WORKER_ERROR',retryable:error?.retryable!==false}});
+  return rpc(client,'update_brand_job_v2',{p_id:job.id,p_worker:workerId,p_token:leaseToken,p_claim:job.claim_token,p_patch:{status:'error',error:message,error_code:error?.code||'WORKER_ERROR',retryable:error?.retryable!==false&&(job.attempt??0)<(job.max_attempts??3)}});
 }
