@@ -7,3 +7,5 @@ worker/data/
 worker/.env*
 !worker/.env.example
 *.log
+supabase/.temp/
+supabase/.branches/
