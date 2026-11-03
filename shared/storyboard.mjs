@@ -22,7 +22,9 @@ export function estimateSpeech(text,seconds){
 }
 export function parseMarkedJson(text,marker){
   const from=text.lastIndexOf(marker);if(from<0)return null;
-  for(let start=text.lastIndexOf('{',from);start>=0;start=text.lastIndexOf('{',start-1)){
+  // lastIndexOf clamps negative positions to zero. Explicitly stop after the
+  // candidate at zero, especially while the response is still streaming.
+  for(let start=text.lastIndexOf('{',from);start>=0;start=start>0?text.lastIndexOf('{',start-1):-1){
     let depth=0,inString=false,escaped=false;
     for(let end=start;end<text.length;end++){
       const c=text[end];

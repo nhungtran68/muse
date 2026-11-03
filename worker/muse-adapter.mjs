@@ -18,7 +18,7 @@ export function parseScenePlan(text,jobId,count) {
   const marker=`PLAN_${jobId.replaceAll('-','_')}`;
   const from=text.lastIndexOf(marker);
   if(from<0) return null;
-  for(let start=text.lastIndexOf('{',from);start>=0;start=text.lastIndexOf('{',start-1)) {
+  for(let start=text.lastIndexOf('{',from);start>=0;start=start>0?text.lastIndexOf('{',start-1):-1) {
     let depth=0,inString=false,escaped=false;
     for(let end=start;end<text.length;end++) {
       const char=text[end];

@@ -34,6 +34,7 @@ try{
   await startupStatus('waiting_muse_login');await muse.waitForLogin();
   if(process.argv.includes('--diagnose'))console.log('MUSE_CHECK_OK');
   else{
+    await startupStatus('waiting_worker_lease');
     while(!token){const lease=await call('acquire_muse_worker',{p_worker:workerId});token=lease?.token||null;if(!token){console.log('Worker khác đang hoạt động; chờ đến lượt.');await sleep(10000);}}
     await renew();if(lost)throw Error('Không thể giữ quyền worker.');
     timer=setInterval(()=>void renew(),20000);
