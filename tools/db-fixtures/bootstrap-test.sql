@@ -1,0 +1,17 @@
+create role anon nologin;
+create role authenticated nologin;
+create schema extensions;
+create schema auth;
+create schema storage;
+create table auth.users(id uuid primary key,email text,email_confirmed_at timestamptz);
+create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
+grant usage on schema auth,storage,public to authenticated,anon;
+grant execute on function auth.uid() to authenticated,anon;
+create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
+create table storage.objects(id bigint generated always as identity primary key,bucket_id text,name text,unique(bucket_id,name));
+alter table storage.objects enable row level security;
+grant select,insert,update,delete on storage.objects to authenticated;
+grant usage,select on all sequences in schema storage to authenticated;
+grant usage on schema extensions to authenticated;
+alter default privileges in schema public grant select,insert,update,delete on tables to authenticated;
+alter default privileges in schema public grant usage,select on sequences to authenticated;
