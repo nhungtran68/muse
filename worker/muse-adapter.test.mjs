@@ -16,7 +16,7 @@ async function fixture(t,html){
   const page=await context.newPage();
   const root=await mkdtemp(path.join(tmpdir(),'muse-worker-regression-'));
   t.after(async()=>{await browser.close();await rm(root,{recursive:true,force:true});});
-  const adapter=new MuseAdapter(path.join(root,'profile'),root,{sceneTimeoutMs:2000,pollMs:20,composerTimeoutMs:1500});
+  const adapter=new MuseAdapter(path.join(root,'profile'),root,{sceneTimeoutMs:6000,pollMs:20,composerTimeoutMs:3000});
   adapter.page=page;
   // This is an isolated local fixture: no Muse account, history, or network requests.
   adapter.requirePage=()=>page;
@@ -34,7 +34,7 @@ test('receives all three scenes when Muse replaces old video cards and the total
       document.querySelector('#history').replaceChildren();
       const messages=document.querySelector('#messages');messages.replaceChildren();
       const message=document.createElement('p');message.textContent=text;messages.append(message);
-      setTimeout(()=>{const result=document.createElement('button');result.setAttribute('aria-label',window.submissions===2?'Mở video':'Open animated video');result.id='video-'+window.submissions;messages.append(result);},50);
+      setTimeout(()=>{const result=document.createElement('div');result.setAttribute('role','button');result.setAttribute('tabindex','0');result.setAttribute('aria-label',window.submissions===2?'Mở video':'Open animated video scene.mp4');result.textContent='Generated video '+window.submissions;result.id='video-'+window.submissions;messages.append(result);},50);
     });</script></main>`);
   adapter.attachReference=async()=>{};
   const outputs=[];
@@ -78,6 +78,19 @@ test('waits for the composer to return after preview closes without navigating a
   assert.equal(page.url(),initialUrl);
 });
 
+test('waits for asynchronous Escape dismissal without racing a disappearing Close button',async t=>{
+  const {adapter,page}=await fixture(t,`<style>@keyframes closing {from {transform:translateX(0)} to {transform:translateX(1000px)}}</style><main><dialog open role="dialog" aria-label="Media preview"><button id="close" aria-label="Close">Close</button></dialog></main><script>
+    window.closeClicks=0;
+    const close=()=>{document.querySelector('dialog')?.remove();const input=document.createElement('textarea');input.setAttribute('aria-label','Message');document.querySelector('main').append(input);};
+    document.addEventListener('keydown',event=>{if(event.key==='Escape'){document.querySelector('#close').style.animation='closing 10s linear infinite';setTimeout(close,1000);}});
+    document.querySelector('#close').addEventListener('click',()=>{window.closeClicks++;close();});
+    </script>`);
+  page.setDefaultTimeout(2000);adapter.composerTimeoutMs=5000;
+  await adapter.cleanComposer();
+  assert.equal(await page.evaluate(()=>window.closeClicks),0);
+  assert.equal(await page.getByRole('dialog').count(),0);
+});
+
 test('downloads the scene and closes media before waiting for the next composer',async t=>{
   const {adapter,page,root}=await fixture(t,'<main><dialog open role="dialog" aria-label="Media preview"><video></video><button id="download">Download</button></dialog></main>');
   await page.evaluate(()=>{
@@ -96,6 +109,7 @@ test('downloads the scene and closes media before waiting for the next composer'
 
 test('a saved request prevents a missing conversation from submitting the scene twice',async t=>{
   const {adapter,page,root}=await fixture(t,'<textarea aria-label="Message"></textarea>');
+  adapter.sceneTimeoutMs=200;
   adapter.attachReference=async()=>{};
   await assert.rejects(()=>adapter.generateScene(job,{index:1,prompt:'A static local test'},'fixture.png'),/Chưa nhận được MP4/);
   const receiptFile=path.join(root,job.id,'request-1.json');
@@ -110,4 +124,13 @@ test('a saved request prevents a missing conversation from submitting the scene 
   page.url=()=>receipt.url;
   await assert.rejects(()=>adapter.generateScene(job,{index:1},'unused.png'),/Không thấy yêu cầu cảnh 1/);
   assert.equal(await page.getByRole('textbox').inputValue(),'');
+});
+
+test('stops promptly when Muse disconnects the account, before any scene is sent',async t=>{
+  const {adapter}=await fixture(t,'<h1>Đã ngắt kết nối Muse</h1><p>Chúng tôi đã ngắt kết nối Muse để bảo vệ thông tin của bạn.</p>');
+  adapter.open=async()=>adapter.page;
+  const start=Date.now();
+  await assert.rejects(()=>adapter.waitForLogin({timeoutMs:30000}),error=>error.code==='MUSE_DISCONNECTED');
+  assert.ok(Date.now()-start<3000);
+  await assert.rejects(()=>adapter.cleanComposer(),error=>error.code==='MUSE_DISCONNECTED');
 });

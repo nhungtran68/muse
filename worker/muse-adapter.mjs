@@ -49,15 +49,46 @@ export class MuseAdapter {
     const {chromium}=await import('playwright');
     const executablePath=installedBrowserExecutable();
     this.context=await chromium.launchPersistentContext(this.profileDir,{headless:false,acceptDownloads:true,viewport:null,...(executablePath?{executablePath}:{})});
-    this.page=this.context.pages()[0]||await this.context.newPage();
-    await this.page.goto('https://muse.ai/',{waitUntil:'domcontentloaded'});
+    const pages=this.context.pages();
+    this.page=pages.find(page=>{try{return new URL(page.url()).hostname==='muse.ai';}catch{return false;}})||pages[0]||await this.context.newPage();
+    if(!this.page.url().startsWith('https://muse.ai/'))await this.page.goto('https://muse.ai/',{waitUntil:'domcontentloaded'});
     return this.page;
   }
-  async waitForLogin(){
+  async assertConnected(){
+    const p=this.requirePage();
+    const disconnected=p.getByRole('heading',{name:/^(\u0110\u00e3 ng\u1eaft k\u1ebft n\u1ed1i Muse|Muse disconnected|Disconnected from Muse)$/i});
+    if(await disconnected.isVisible().catch(()=>false)){
+      const error=Error('Muse đã ngắt kết nối tài khoản để bảo vệ thông tin. Cần kết nối lại qua hỗ trợ Muse trước khi tạo video.');
+      error.code='MUSE_DISCONNECTED';throw error;
+    }
+  }
+  async close(){
+    if(this.context)await this.context.close();
+    this.context=null;this.page=null;
+  }
+  async captureDiagnostics(jobId,error){
+    const p=this.page;if(!p||p.isClosed())return;
+    const dir=path.join(this.downloadsDir,jobId,'diagnostics');await mkdir(dir,{recursive:true});
+    const url=new URL(p.url());
+    const controls=await p.locator('button,a,[role="button"],[role="link"]').evaluateAll(elements=>elements.map(element=>({tag:element.tagName,role:element.getAttribute('role'),label:(element.getAttribute('aria-label')||element.textContent||'').trim().slice(0,180)})).filter(item=>/^(Mở|Xem) video\b|^(Open|View|Play) (?:animated )?video\b/i.test(item.label)).slice(-10));
+    const requestPresent=await p.locator('body').evaluate((element,id)=>element.innerText.includes(id),jobId);
+    await writeFile(path.join(dir,'state.json'),JSON.stringify({time:new Date().toISOString(),url:url.origin+url.pathname,error:error.message,requestPresent,composerVisible:await this.composer().isVisible().catch(()=>false),controls},null,2));
+    await p.screenshot({path:path.join(dir,'muse.png')});
+    console.log(`Thông tin kiểm tra: ${dir}`);
+  }
+  async waitForLogin({timeoutMs=600000}={}){
     const p=await this.open();
-    console.log('Hãy đăng nhập Muse trong cửa sổ vừa mở; worker sẽ tiếp tục khi thấy ô chat.');
-    await p.getByRole('textbox',{name:/^(Nhắn tin|Message)$/i}).waitFor({state:'visible',timeout:600000});
-    console.log('Đã thấy ô chat Muse.');
+    console.log('Đang kiểm tra kết nối Muse; nếu cần, hãy đăng nhập trong cửa sổ Muse.');
+    const until=Date.now()+timeoutMs;
+    while(Date.now()<until){
+      await this.assertConnected();
+      if(await this.composer().isVisible().catch(()=>false)){
+        console.log(`Đã thấy ô chat Muse. URL: ${p.url()}`);return;
+      }
+      await new Promise(resolve=>setTimeout(resolve,500));
+    }
+    const error=Error('Chưa thấy ô chat Muse. Kiểm tra đăng nhập và trạng thái kết nối trong cửa sổ Muse.');
+    error.code='MUSE_NOT_READY';throw error;
   }
   requirePage(){
     if(!this.page||this.page.isClosed()||new URL(this.page.url()).hostname!=='muse.ai')throw Error('Cửa sổ Muse không sẵn sàng.');
@@ -69,14 +100,20 @@ export class MuseAdapter {
     const p=this.requirePage(),preview=this.preview();
     if(!await preview.isVisible().catch(()=>false))return;
     await p.keyboard.press('Escape');
-    if(await preview.isVisible().catch(()=>false)){
+    // Escape closes Muse asynchronously. Do not race its transition with a second click.
+    const closed=await preview.waitFor({state:'hidden',timeout:Math.min(2000,this.composerTimeoutMs)}).then(()=>true,()=>false);
+    if(!closed&&await preview.isVisible().catch(()=>false)){
       const close=preview.getByRole('button',{name:/^(\u0110\u00f3ng|Close|Dismiss)(?:\s|$)/i});
-      if(await close.count()===1)await close.click();
+      if(await close.count()===1){
+        try{await close.click({timeout:2000});}
+        catch(error){if(await preview.isVisible().catch(()=>false))throw error;}
+      }
     }
     await preview.waitFor({state:'hidden',timeout:this.composerTimeoutMs});
   }
   async cleanComposer(){
     const p=this.requirePage();
+    await this.assertConnected();
     await this.closePreview();
     const input=this.composer();
     // Muse remounts the composer after closing media; keep the current conversation.
@@ -96,6 +133,7 @@ export class MuseAdapter {
     const until=Date.now()+150000;
     while(Date.now()<until){
       if(p.isClosed())throw Error('Muse đã đóng trong lúc lập kế hoạch.');
+      await this.assertConnected();
       const body=await p.locator('body').innerText();
       const parsed=parseScenePlan(body,job.id,job.scene_count);
       if(parsed)return parsed;
@@ -194,6 +232,7 @@ export class MuseAdapter {
     const until=Date.now()+this.sceneTimeoutMs;
     while(Date.now()<until){
       if(p.isClosed())throw Error('Cửa sổ Muse đã đóng giữa chừng.');
+      await this.assertConnected();
       if(receipt&&receipt.url!==p.url()){
         receipt.url=p.url();await writeFile(receiptFile,JSON.stringify(receipt));
       }

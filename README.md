@@ -11,7 +11,11 @@ Web cho thành viên tạo video thương hiệu từ **ảnh tham chiếu + n�
 
 ## Trạng thái triển khai
 
-Phần web, cơ sở dữ liệu và luồng xử lý có mã nguồn trong repo. **Tải ảnh tham chiếu, lập kế hoạch cảnh và tạo video qua Muse thực chưa được kiểm thử từ đầu đến cuối** vì không thể quan sát cửa sổ Muse đăng nhập qua công cụ trong lượt phát triển này. Trang quản trị mặc định tắt nhận yêu cầu. Chỉ bật sau khi chạy worker và xác minh một video nhiều cảnh bằng dữ liệu thử nghiệm không nhạy cảm.
+Bản worker **1.5.2** đã được kiểm tra thực tế ngày **03/11/2026** với ảnh tham chiếu, ba cảnh dọc 9:16, mỗi cảnh 10 giây. Lượt đang lỗi được tiếp tục từ MP4 đã tải; một lượt mới được gửi qua giao diện web, Muse chia cảnh, tạo đủ ba MP4 riêng, FFmpeg ghép thành video 30.042667 giây và video đã phát đến cuối trên web. Kiểm tra mã băm xác nhận ba cảnh là ba tệp khác nhau.
+
+Lỗi đóng xem trước được tái hiện: nút Close biến mất sau Escape trong lúc Playwright đang chờ bấm. Worker chờ phần xem trước đóng xong trước khi dùng nút dự phòng. Có kiểm tra hồi quy cho tình huống này và việc lịch sử Muse thay đổi số lượng thẻ video.
+
+Chạy `npm test` trong thư mục `worker` sau khi cài thư viện để chạy bộ kiểm tra. Thử nghiệm thực tế trên đây áp dụng cho ba cảnh, 10 giây/cảnh; không chứng minh mọi cấu hình hoặc mọi thay đổi giao diện Muse trong tương lai.
 
 ## Thiết lập quản trị
 

@@ -15,8 +15,14 @@ Chỉ chạy một worker tại một thời điểm. Không gửi thư mục `d
 
 Worker nhận video theo yêu cầu của từng cảnh, thay cho việc đếm tổng số nút video trong lịch sử. Sau khi tải MP4, worker đóng phần xem trước và chờ ô chat sẵn sàng trước khi gửi cảnh tiếp theo.
 
-Khi cập nhật, đóng worker và Chrome của worker rồi mở lại `02-CHAY-WORKER.cmd`. Dòng đầu phải ghi **Muse Brand Worker v1.5.0**. Giữ thư mục `data` để giữ phiên đăng nhập và các MP4 đã tải; không cần cài lại thư viện nếu đã dùng bản trước.
+Khi cập nhật, đóng worker và Chrome của worker rồi mở lại `02-CHAY-WORKER.cmd`. Dòng đầu phải ghi **Muse Brand Worker v1.5.2**. Giữ thư mục `data` để giữ phiên đăng nhập và các MP4 đã tải; không cần cài lại thư viện nếu đã dùng bản trước.
 
 Worker lưu đường dẫn cuộc chat và dấu nhận yêu cầu theo từng cảnh. Khi tiếp tục tác vụ gián đoạn, worker lấy lại kết quả đã gửi, giữ các cảnh hoàn tất và MP4 đã tải. Nếu không tìm thấy đúng cuộc chat, worker dừng để quản trị kiểm tra. Nhật ký nằm ở `data/worker.log`.
 
-Các kiểm tra tự động dùng giao diện mô phỏng không kết nối Muse, gồm ba cảnh khi số thẻ video không tăng, đóng xem trước, tải MP4, chống gửi trùng và tiếp tục ghép video 30 giây. Cần kiểm chứng lại bằng lượt tạo thật trên Muse trước khi coi lỗi thực tế đã được xử lý hoàn toàn.
+## Cập nhật 1.5.2
+
+Sửa tình huống Muse đóng phần xem trước sau Escape trong khi worker đang bấm Close. Worker chờ thao tác đóng hoàn tất trước khi chuyển sang cảnh tiếp theo. Có kiểm tra tệp trùng để không ghép lại cùng một MP4 thành nhiều cảnh. Lỗi hiển thị trên web dùng câu dễ đọc; thông tin chi tiết nằm ở nhật ký và thư mục `data/downloads/<tác vụ>/diagnostics` trên máy quản trị.
+
+Bản 1.5.2 đã chạy thực tế ngày 03/11/2026: hoàn tất lượt bị lỗi và một lượt mới gửi từ web, mỗi lượt ba cảnh 10 giây, ba tệp khác nhau, MP4 ghép dài 30.042667 giây. Video mới đã phát đến cuối trên web. Các kiểm tra tự động còn bao gồm lỗi đóng bất đồng bộ, số thẻ video không tăng, khôi phục cảnh dở, chống gửi trùng, chống ghép trùng và thông báo Muse ngắt kết nối.
+
+Để kiểm tra kết nối mà không gửi yêu cầu tạo video, chạy `node worker.mjs --diagnose` khi không có worker khác đang dùng hồ sơ này. Khi mở worker, dòng đầu phải ghi **Muse Brand Worker v1.5.2**. Khi cập nhật phải đóng worker cũ rồi mở lại để nạp mã mới.
