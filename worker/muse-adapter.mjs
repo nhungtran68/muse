@@ -2,16 +2,16 @@ import {mkdir,rename,stat,unlink,open} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
 import path from 'node:path';
 
-function installedBrowserChannel(){
+function installedBrowserExecutable(){
   if(process.platform!=='win32')return null;
   const candidates=[
-    ['chrome',path.join(process.env.PROGRAMFILES||'C:\\Program Files','Google','Chrome','Application','chrome.exe')],
-    ['chrome',path.join(process.env['PROGRAMFILES(X86)']||'C:\\Program Files (x86)','Google','Chrome','Application','chrome.exe')],
-    ['chrome',path.join(process.env.LOCALAPPDATA||'','Google','Chrome','Application','chrome.exe')],
-    ['msedge',path.join(process.env.PROGRAMFILES||'C:\\Program Files','Microsoft','Edge','Application','msedge.exe')],
-    ['msedge',path.join(process.env['PROGRAMFILES(X86)']||'C:\\Program Files (x86)','Microsoft','Edge','Application','msedge.exe')]
+    path.join(process.env.PROGRAMFILES||'C:\\Program Files','Google','Chrome','Application','chrome.exe'),
+    path.join(process.env['PROGRAMFILES(X86)']||'C:\\Program Files (x86)','Google','Chrome','Application','chrome.exe'),
+    path.join(process.env.PROGRAMFILES||'C:\\Program Files','Microsoft','Edge','Application','msedge.exe'),
+    path.join(process.env['PROGRAMFILES(X86)']||'C:\\Program Files (x86)','Microsoft','Edge','Application','msedge.exe'),
+    path.join(process.env.LOCALAPPDATA||'','Google','Chrome','Application','chrome.exe')
   ];
-  return candidates.find(([,file])=>existsSync(file))?.[0]||null;
+  return candidates.find(file=>existsSync(file))||null;
 }
 
 export function parseScenePlan(text,jobId,count) {
@@ -45,8 +45,8 @@ export class MuseAdapter {
   async open(){
     if(this.page&&!this.page.isClosed())return this.page;
     const {chromium}=await import('playwright');
-    const channel=installedBrowserChannel();
-    this.context=await chromium.launchPersistentContext(this.profileDir,{headless:false,acceptDownloads:true,viewport:null,...(channel?{channel}:{})});
+    const executablePath=installedBrowserExecutable();
+    this.context=await chromium.launchPersistentContext(this.profileDir,{headless:false,acceptDownloads:true,viewport:null,...(executablePath?{executablePath}:{})});
     this.page=this.context.pages()[0]||await this.context.newPage();
     await this.page.goto('https://muse.ai/',{waitUntil:'domcontentloaded'});
     return this.page;
