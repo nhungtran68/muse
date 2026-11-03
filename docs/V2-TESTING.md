@@ -1,58 +1,69 @@
-# Kiểm thử Workflow v2
+# Muse Studio v2 — báo cáo kiểm tra ngày 03/11/2026
 
-Cập nhật ngày 03/11/2026. Các luồng cục bộ đã có bằng chứng bên dưới; đang chuẩn bị cập nhật cơ sở dữ liệu chính. Chưa nghiệm thu toàn bộ trên web chính. Không coi kiểm thử mô phỏng là kết quả chạy Muse thật.
+Web chính: https://muse-brand-studio.vercel.app/ — GitHub: https://github.com/nhungtran68/muse
+
+Database và web v2 đã được cập nhật. Worker Windows 2.0.0 đã được cài và kiểm tra thư viện. **Chưa chốt nghiệm thu toàn bộ**: đang chạy lại yêu cầu ba cảnh trên web chính sau khi sửa lỗi đọc JSON trả dở. Không dùng các lượt bị chặn làm bằng chứng tạo video thành công.
 
 ## Logic đã sửa
 
-- Giữ nguyên nội dung thô, yêu cầu Muse phân tích chủ đề, thông điệp, nhân vật, ngữ cảnh và mục đích; lập dàn ý và đúng số cảnh. Mỗi cảnh có prompt, lời thoại, hành động, thời lượng và trích dẫn nguồn.
-- Ước tính tiếng Việt trước khi tạo. Kiểm tra lời nói thực bằng faster-whisper trên máy, gồm độ khớp, phần kết câu, thời điểm kết thúc và thời lượng nói tối thiểu 60% mode. Kiểm tra lại âm thanh sau khi ghép.
-- Mỗi người, job và lần xử lý có mã riêng. Hàng đợi FIFO, một quyền thuê worker Muse, gia hạn 20 giây, hết hạn 90 giây; mọi cập nhật kiểm tra mã lần xử lý.
-- Khóa chống gửi trùng theo người dùng, khóa yêu cầu và dấu vân tay nội dung/ảnh. File ảnh kiểm tra SHA-256; video lưu bất biến theo user/job/lần xử lý.
-- Mỗi job mở cuộc trò chuyện Muse riêng. Chỉ lấy video trong phản hồi của đúng tin nhắn người gửi, trước tin nhắn tiếp theo. Chờ lịch sử tải xong, xác minh đúng URL khi mở lại. Không tự gửi lại yêu cầu đã có biên nhận.
-- Cảnh bị loại do thoại có thể tạo lại bằng mã lần tạo mới; giữ các cảnh đã đạt. Lỗi từ Muse được ghi nhận thay vì chờ vô hạn hoặc trả file sai.
-- RLS bảo vệ job, cảnh, ảnh và video; thành viên xem lịch sử của mình. Phản hồi chậm từ tài khoản cũ không được hiển thị sau khi đổi tài khoản. Yêu cầu đang gửi dùng phiên của người đã bấm gửi.
-- Quản trị xem cả lỗi v2, thử lại khi còn lượt và lỗi cho phép. Không biến job lỗi thành hoàn tất bằng thao tác duyệt.
+- Nội dung thương hiệu giữ nguyên là đầu vào thô. Muse phân tích chủ đề, thông điệp, nhân vật, ngữ cảnh và mục đích; tạo các cảnh theo thứ tự, kèm prompt, thoại, hành động, thời lượng và trích dẫn nguồn. Dàn ý dạng danh sách được chuẩn hóa; nếu thiếu dàn ý, chỉ tổng hợp từ lời thoại các cảnh đã qua kiểm tra.
+- Ước tính tiếng Việt trước khi tạo; kiểm tra âm thanh thật sau mỗi cảnh và sau khi ghép bằng faster-whisper chạy trên máy. Kiểm tra độ khớp, phần kết, mốc kết thúc và thời lượng nói tối thiểu 60% mode. Không gọi thêm API AI.
+- Mỗi job có user_id, job_id, thời gian tạo, khóa chống trùng, hash ảnh và mã lần xử lý. Bấm gửi lại trong lúc yêu cầu còn tồn tại không tạo thêm job trùng.
+- Hàng đợi FIFO và một quyền thuê worker cho tài khoản Muse, gia hạn 20 giây, hết hạn 90 giây. Mọi cập nhật kiểm tra đúng worker, quyền thuê và mã lần xử lý. Ảnh/file tạm/kết quả tách theo user/job/lần xử lý; video không ghi đè.
+- Cảnh đã xong được giữ khi thử lại. Cảnh đã gửi có biên nhận thì chỉ tìm lại đúng kết quả, không gửi trùng. Cảnh bị loại vì thoại có thể dùng mã tạo mới trong giới hạn thử lại.
+- Tách cuộc trò chuyện cho từng job; chỉ đọc phản hồi sau đúng tin nhắn người dùng và trước tin nhắn tiếp theo. Không lấy JSON mẫu trong câu hỏi hoặc video của cảnh khác.
+- Thành viên chỉ thấy lịch sử, prompt, thoại, ảnh và video của mình. Phản hồi chậm từ tài khoản cũ bị bỏ qua khi đổi đăng nhập. Quản trị xem và xử lý lỗi v2; không đánh dấu job lỗi thành hoàn tất bằng nút duyệt.
+- Tác vụ trong database chạy mỗi phút để phát hiện job hết quyền xử lý, chuyển job/cảnh đang tạo sang Lỗi, giữ biên nhận và ghi lịch sử lỗi. Không phụ thuộc worker còn chạy được hay không.
 
-## Ma trận kết quả hiện có
+## Lỗi đã phát hiện và xử lý
 
-| Trường hợp | Bằng chứng | Trạng thái |
-| --- | --- | --- |
-| Một thành viên, một yêu cầu | Worker v2 + Supabase cục bộ thật + Muse, tạo và tải MP4 | Đạt một lượt |
-| Một thành viên gửi liên tiếp | Web + Auth/REST/Storage thật, hai job riêng trong lịch sử | Đạt: gửi từ web, worker tạo và tải file đúng người |
-| Hai thành viên gửi cùng lúc | Hai job khác ảnh/nội dung/mode, worker tạo đủ kết quả riêng | Đạt một lượt |
-| Nhiều người cùng mode khác nội dung | Web tạo hai job 10 giây đồng thời | Đạt: hai nội dung/ảnh khác nhau, cùng mode 10 giây, có MP4 riêng |
-| Hai job khác ảnh và thời lượng | Một job 5 giây, một job hai cảnh 10 giây, file không trùng | Đạt một lượt, không đủ để mở mode 5 giây ổn định |
-| Một job lỗi, một thành công | Cố ý sai SHA ảnh; job kế tiếp hoàn tất; một video khác bị chặn vì cắt thoại | Đạt một lượt |
-| Tải lại trang khi đang xử lý | Trình duyệt mô phỏng trạng thái đang xử lý; web + Supabase thật giữ lịch sử job đã gửi | Đạt: tải lại trong lúc worker chạy, lịch sử và kết quả giữ đúng |
-| Lịch sử và quyền dữ liệu | Hai người không đọc được job/cảnh/ảnh/video và URL ký của nhau trên Supabase cục bộ | Đạt |
-| Thời lượng thoại | Video hai cảnh 10 giây, file 20,04 giây; lời nói 6,54 và 6,24 giây, tỷ lệ sai từ file ghép 4,3% | Đạt mẫu này |
-| Kết quả không trộn file | So đường dẫn, mã job, hash; tải bằng đúng người và chặn người còn lại | Đạt mẫu đã thử |
-| Tạo lại sau lỗi thoại/gián đoạn | Nhận lại GEN_0 bằng biên nhận, không gửi trùng; GEN_1 tải được nhưng bị loại vì thoại quá ngắn | Đạt cơ chế chặn lỗi; chưa có lượt tạo lại đạt âm thanh mới |
-| Đổi tài khoản khi phản hồi đến chậm | Giữ phản hồi người A, đăng nhập B, trả phản hồi A sau đó | Kiểm thử trình duyệt đạt |
+1. Vòng đọc JSON có thể lặp vô hạn tại vị trí đầu chuỗi khi Muse đang trả dở hoặc trả sai mã. Đã tái hiện bằng tiến trình có timeout: trước sửa bị timeout, sau sửa trả ngay. Cả bộ đọc v1 và v2 đã sửa.
+2. Bộ đọc có thể chọn JSON mẫu trong câu hỏi khi mở lại cùng cuộc trò chuyện. Đã giới hạn chỉ phản hồi của trợ lý và dùng mã riêng cho từng lần lập kịch bản.
+3. Dàn ý bị kiểm tra quá cứng theo một dạng chuỗi. Đã chấp nhận danh sách chuỗi hoặc tổng hợp từ các cảnh hợp lệ, không bỏ qua các kiểm tra nội dung/thời lượng.
+4. Mở lại cuộc trò chuyện có thể chưa tải xong lịch sử hoặc bị chuyển sang URL khác. Đã chờ lịch sử và dừng nếu URL không đúng.
+5. Video có thể bị nhận nhầm khi trợ lý nhắc lại mã yêu cầu hoặc có video của tin nhắn sau. Đã giới hạn phạm vi phản hồi theo tin nhắn người dùng.
+6. Phản hồi lịch sử cũ có thể cập nhật giao diện sau khi đổi tài khoản. Đã chặn theo người dùng và lượt tải.
+7. Worker mất kết nối có thể để job ở Đang xử lý đến khi có worker khác chạy. Đã thêm lịch tự phát hiện hết hạn, kiểm tra thực tế trên database chính.
+8. Lệnh khởi động GitHub vẫn trỏ worker v1. Đã chuyển sang v2, dùng npm ci và kiểm tra FFmpeg trước khi gửi việc tạo video.
+9. Muse có lúc tạo sai thời lượng 5/8 giây hoặc cắt thoại. Đã khóa 5/8 giây, kiểm tra video/âm thanh và không giao file sai như một kết quả hoàn tất.
 
-23/23 kiểm thử tự động đạt sau các sửa đổi cuối. Bản dựng web đạt. Gói worker v2 đã được giải nén, cài bằng npm ci và kiểm tra FFmpeg/nhận dạng giọng nói; không có thông tin đăng nhập trong ZIP. Các SQL trong `tools/db-fixtures` chỉ dành cho PostgreSQL thử riêng, không chạy vào cơ sở dữ liệu có khách hàng.
+## Kết quả từng trường hợp
 
-Mode 10 giây được giữ. Mode 5 giây có lượt thành công nhưng có lượt Muse tạo 10 giây và từ chối giao file; tạm khóa. Mode 8 giây đã trả 10 giây trước đó nên khóa. Không tự thay mode.
+| Trường hợp | Kết quả và phạm vi |
+| --- | --- |
+| Một thành viên, một yêu cầu | Đạt qua worker v2, Muse và Supabase cục bộ thật, có MP4 |
+| Một thành viên gửi liên tiếp | Đạt: một người có hai job riêng, cả hai tạo và tải đúng file từ web |
+| Hai thành viên gửi đồng thời | Đạt qua web/Auth/REST/Storage/Muse/worker thật ở môi trường cục bộ |
+| Cùng mode, khác nội dung | Đạt: hai người cùng chọn 10 giây, dùng ảnh/nội dung nho và trà khác nhau |
+| Khác ảnh và thời lượng | Đã có lượt 5/10 giây thành công trước đó; bản hiện tại chỉ mở 10 giây vì 5/8 chưa ổn định |
+| Một job thành công, một lỗi | Đạt: cố ý sai ảnh bị chặn; job kế tiếp vẫn hoàn tất; thoại bị cắt cũng bị loại |
+| Tải lại trang khi worker chạy | Đạt: trạng thái/lịch sử còn đúng và job tiếp tục xử lý |
+| Quyền lịch sử và file | Đạt: hai người chỉ thấy dữ liệu riêng; tải bằng đúng người khớp hash, người còn lại bị chặn |
+| Thời lượng thoại | Bốn cảnh 10 giây trong lượt thử từ web nói 6,10 / 7,76 / 9,06 / 7,20 giây; file ghép qua kiểm tra lại |
+| Kết quả không trộn | Đạt mẫu nho/trà: đường dẫn/hash khác nhau, quyền đúng; đã xem khung hình nho ở giây 2/12 và trà ở giây 2 |
+| Thử lại/gián đoạn | Đã nhận lại video cũ bằng biên nhận mà không gửi lại; bản tạo lại bị loại nếu thoại không đạt. Chưa coi một bản bị loại là thành công |
+| Đăng ký/xác nhận/đăng nhập | Hai tài khoản cục bộ nhận thư, xác nhận, đăng nhập bằng mật khẩu; trước xác nhận bị chặn, trước duyệt bị chặn tạo job |
+| Thành viên trên web chính | Đăng ký và thư xác nhận thật đã đạt với địa chỉ thử thuộc hộp thư quản trị; phiên sau xác nhận có role member, approved=false, thấy 0 job và bị chặn tạo job; đã đăng xuất |
+| Worker đứng trên web chính | Đạt: lịch database chạy succeeded và tự chuyển job sang WORKER_INTERRUPTED, giữ quyền thử lại |
+| JSON trả dở | 2 kiểm thử timeout tái hiện lỗi trước sửa, đạt sau sửa. Toàn bộ 27/27 kiểm thử tự động và bản dựng đạt |
+| Ba cảnh trên bản chính mới nhất | ĐANG THỬ LẠI — job 305ef5ee-00c3-484e-b466-62058ce85e1a |
 
-## Giới hạn và phần còn lại
+Lượt web cục bộ thật có ba job hoàn tất: f7029bbc-8799-47b3-91b4-cd3c948f1d39 (trà, 1 cảnh), b5a326da-4330-4220-8fa1-9990e137b975 (nho, 2 cảnh), f9e774c3-94fe-4199-9019-5827f67e9204 (nho, 1 cảnh). File 10/20/10 giây tải về đúng người và đúng hash.
 
-- Lượt web/worker/Supabase/Muse thật đã đạt ba job của hai thành viên: một người có hai job, người kia một job; các file 10, 20 và 10 giây tải đúng người, mã băm đúng. Bốn cảnh nói 6,10; 7,76; 9,06 và 7,20 giây. Hai khung hình nho ở giây 2/12 và một khung hình trà đã được xem đối chiếu. Chưa nghe duyệt thủ công toàn bộ âm thanh.
-- Hai tài khoản khác đã đăng ký, nhận thư SMTP nội bộ, xác nhận, đăng nhập lại; trước xác nhận bị chặn đăng nhập và trước duyệt bị chặn tạo job. Đây là môi trường thử, chưa chứng minh gửi thư cho khách ngoài trên Supabase chính.
-- Cần hoàn thiện gói worker, cập nhật Supabase/Vercel có phối hợp rồi kiểm tra trên web chính. Worker v1 không được nhận job v2. Dữ liệu chính đang có 1 hồ sơ, 4 job, 12 cảnh và 18 file; chỉ lưu cấu trúc trước khi nâng cấp, không xuất nội dung khách hàng.
-- Nhận dạng tiếng nói và kiểm tra trích dẫn có sai số. Chúng không chứng minh mọi chi tiết thương hiệu do Muse viết đều có căn cứ; cần nghe, xem và đọc đối chiếu thêm khi nghiệm thu.
-- Cuộc trò chuyện riêng không tắt ký ức chung của tài khoản Muse. Không thể cam kết tuyệt đối rằng mô hình không dùng dữ liệu cũ. Chưa nghiệm thu để phục vụ công khai khách ngoài.
+## Triển khai và dữ liệu
 
-## Cập nhật và khôi phục
+- Đã giữ nguyên 4 job cũ, 12 cảnh cũ và 18 file cũ khi nâng cấp. Không xóa hoặc ghi đè kết quả cũ. Một job lỗi cũ v1 vẫn được giữ để quản trị xem lại.
+- Migration 004/005 và hai migration hết hạn worker đã áp dụng. Chỉ mode 10 giây bật.
+- Có một tài khoản QA thuộc email quản trị trong danh sách thành viên, đang chưa được duyệt và không có job. Không cấp quyền quản trị cho tài khoản thử.
+- Gói worker không chứa data/profile/phiên đăng nhập/mật khẩu; thông tin quản trị chỉ ở bộ nhớ lúc chạy. Trạng thái khởi động chỉ lưu mã worker, bước hiện tại và lỗi đã lọc.
+- Lỗi của trình kiểm thử được loại khỏi bằng chứng đạt: dữ liệu multipart bị Playwright bỏ phần file, chờ sai tài khoản trong FIFO, xác nhận email bằng đổi fragment trên trang cũ. Bài thử cuối dùng Supabase trực tiếp và mở liên kết email thật.
 
-Chỉ cập nhật sau khi các kiểm thử cần thiết đạt. Tắt nhận yêu cầu trong lúc chuyển đổi, dừng worker v1, kiểm tra không có job đang chạy, áp dụng 004 rồi 005, triển khai web tương ứng và mở worker v2. Giữ toàn bộ lịch sử và file cũ. Chỉ bật nhận yêu cầu khi worker v2 báo sẵn sàng.
+## Phần chưa thể bảo đảm
 
-Bản ghi cấu trúc trước nâng cấp được lưu riêng ngoài repo. Nếu cập nhật gặp lỗi, giữ nhận yêu cầu tắt, dừng worker mới và dùng bản ghi cấu trúc để chuẩn bị migration tiến có kiểm tra. Không xóa cột hoặc dữ liệu v2; không chỉ đổi web về v1 rồi bật nhận yêu cầu vì quyền/RPC không tương thích.
+- Chưa nghiệm thu 5/8 giây. Không tự thay thành 10 giây hoặc cắt video để che lỗi.
+- Nhận dạng giọng nói và kiểm tra trích dẫn có sai số; chưa nghe duyệt thủ công toàn bộ video. Không chứng minh mọi chi tiết do mô hình tạo đều có căn cứ.
+- Cuộc trò chuyện riêng không tắt ký ức chung của tài khoản Muse hiện tại. Chưa chứng minh cách ly tuyệt đối ở phía Muse cho mọi nội dung khách ngoài.
+- Supabase còn cảnh báo tính năng chống mật khẩu đã rò rỉ chưa bật. Các RPC SECURITY DEFINER có chủ đích và kiểm tra quyền; tài khoản chưa đăng nhập không đọc được job trên API chính.
+- Worker và Chrome trên máy quản trị phải tiếp tục mở, máy có mạng. Chưa triển khai worker máy chủ 24/7, tính phí hoặc hủy yêu cầu đang tạo. Ba công cụ ngoài Tạo thương hiệu vẫn là Sắp có.
 
-## Bằng chứng lượt web và worker thật
-
-- Job trà một cảnh: `f7029bbc-8799-47b3-91b4-cd3c948f1d39`.
-- Job nho hai cảnh: `b5a326da-4330-4220-8fa1-9990e137b975`.
-- Job nho tiếp theo: `f9e774c3-94fe-4199-9019-5827f67e9204`.
-- Báo cáo cục bộ: `ui-worker-evidence.json`, `email-confirmation-evidence.json` và `full-worker-failure-evidence.json`, nằm ngoài repo cùng môi trường thử. Không đưa profile trình duyệt, thư xác nhận, mật khẩu hoặc token vào repo.
-
-Lỗi của trình kiểm thử đã được tách khỏi lỗi ứng dụng: Playwright bỏ dữ liệu file khi đọc thân multipart nên bài thử chuyển sang tải trực tiếp vào Supabase; điều kiện chờ giao diện phải theo đúng người sở hữu job được FIFO lấy trước; xác nhận email phải đi qua liên kết thật thay vì chỉ đổi fragment URL trên trang đã mở. Không ghi các lượt đó là đạt.
+Không báo hoàn thành 100% hoặc nghiệm thu toàn bộ trên web chính trước khi lượt ba cảnh cuối có MP4 đạt kiểm tra.
