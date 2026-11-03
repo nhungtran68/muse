@@ -43,7 +43,8 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
       file=path.join(dir,`scene-${scene.index}.mp4`);await writeFile(file,data);
     }else{
       await updateScene(scene.index,{status:'generating'});
-      const video=await muse.generateSceneV2(job,scene,image,{
+      const generation=Number(previous?.generation||0);
+      const video=await muse.generateSceneV2(job,{...scene,generation},image,{
         receipt:previous?.request_receipt,
         onBeforeSend:receipt=>updateScene(scene.index,{status:'generating',submission_state:'sending',request_receipt:receipt})
       });
@@ -51,7 +52,12 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
       const meta=await probeVideo(file);validateScene(meta,job.scene_seconds);
       if(Math.abs(meta.duration-job.scene_seconds)>.4)throw Object.assign(Error(`Cảnh ${scene.index} sai thời lượng yêu cầu.`),{code:'SCENE_DURATION_MISMATCH',retryable:false});
       const audit=await auditor.verify(file,scene,job.scene_seconds);
-      if(!audit.ok)throw Object.assign(Error(`Cảnh ${scene.index}: lời thoại không khớp hoặc chưa được đọc hết (${audit.reason}).`),{code:audit.reason||'SPEECH_UNVERIFIED',retryable:false});
+      if(!audit.ok){
+        const retryable=generation<2;
+        const detail=`Cảnh ${scene.index}: lời thoại không khớp hoặc chưa được đọc hết (${audit.reason}).`;
+        if(retryable)await updateScene(scene.index,{status:'error',generation:generation+1,submission_state:'not_sent',request_receipt:null,error_code:audit.reason||'SPEECH_UNVERIFIED',error:detail});
+        throw Object.assign(Error(retryable?detail+' Có thể thử tạo lại cảnh này.':detail+' Cần quản trị viên kiểm tra.'),{code:audit.reason||'SPEECH_UNVERIFIED',retryable});
+      }
       const data=await readFile(file),fingerprint=sha256(data);
       if(hashes.has(fingerprint))throw Object.assign(Error('Video các cảnh bị trùng.'),{code:'DUPLICATE_SCENE',retryable:false});
       const key=`${job.user_id}/${job.id}/${job.claim_token}/scenes/${String(scene.index).padStart(2,'0')}.mp4`;

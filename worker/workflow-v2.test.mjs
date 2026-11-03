@@ -45,3 +45,17 @@ test('isolates paths, receipts and results for two jobs with different inputs',a
   const bad={...jobs[0],claim_token:randomUUID(),reference_sha256:'0'.repeat(64)};
   await assert.rejects(processBrandJobV2(bad,{client,muse,auditor,workRoot:root,workerId:randomUUID(),leaseToken:randomUUID()}),{code:'REFERENCE_MISMATCH'});
 });
+
+test('a verified bad scene can be retried using a new generation without resending an uncertain request',async t=>{
+  const root=await mkdtemp(path.join(tmpdir(),'muse-v2-retry-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const video=path.join(root,'test.mp4');await clip(video,'green');
+  const image=Buffer.alloc(128,1);image.set([137,80,78,71,13,10,26,10]);
+  const job={id:randomUUID(),user_id:randomUUID(),claim_token:randomUUID(),schema_version:2,reference_path:'fixture/image',reference_sha256:hash(image),scene_count:1,scene_seconds:5,content:'Nội dung thử lời thoại',plan:[]};
+  const client=fakeClient([job],[image]);
+  const muse={async beginJob(){return {url:'https://muse.ai/thread/fixture'};},async storyboard(){return {analysis:{},outline:'Kịch bản thử',scenes:[{index:1,prompt:'Cảnh thử',dialogue:'Xin chào',seconds:5,action:'',source_quotes:[]}]};},async generateSceneV2(_job,scene,_image,{onBeforeSend}){assert.equal(scene.generation,0);await onBeforeSend({key:'fixture'});return {path:video};}};
+  await assert.rejects(processBrandJobV2(job,{client,muse,auditor:{async verify(){return {ok:false,reason:'CUT_OFF_SPEECH'};}},workRoot:root,workerId:randomUUID(),leaseToken:randomUUID()}),error=>error.code==='CUT_OFF_SPEECH'&&error.retryable===true);
+  const patches=client.patches.filter(p=>p.name==='update_brand_scene_v2').map(p=>p.args.p_patch);
+  assert.ok(patches.some(p=>p.submission_state==='sending'&&p.request_receipt?.key==='fixture'));
+  assert.ok(patches.some(p=>p.status==='error'&&p.generation===1&&p.submission_state==='not_sent'&&p.request_receipt===null));
+  assert.equal(client.objects.size,1);
+});
