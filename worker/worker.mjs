@@ -4,6 +4,7 @@ import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import readline from 'node:readline';
+import {createInterface as createQuestionInterface} from 'node:readline/promises';
 import {MuseAdapter} from './muse-adapter.mjs';
 import {joinScenes,probeVideo,validateScene} from './ffmpeg.mjs';
 import {publishableKey,supabaseUrl} from './config.js';
@@ -39,8 +40,11 @@ function hiddenPassword(){
 async function adminLogin(){
   const current=await supabase.auth.getUser();let user=current.data.user;
   if(!user){
-    const prompt=readline.createInterface({input:process.stdin,output:process.stdout});
-    const email=(await prompt.question('Email quản trị web: ')).trim();prompt.close();
+    const prompt=createQuestionInterface({input:process.stdin,output:process.stdout});
+    let email;
+    try{email=(await prompt.question('Email quản trị web: ')).trim();}
+    finally{prompt.close();}
+    if(!email)throw Error('Vui lòng nhập email quản trị web.');
     const password=await hiddenPassword();
     const signed=await supabase.auth.signInWithPassword({email,password});if(signed.error)throw signed.error;
     user=signed.data.user;
