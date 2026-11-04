@@ -39,6 +39,17 @@ test('continues cleanup after a bucket error and reports failure for retry',asyn
   assert.equal(result.failures[0].bucket,'brand-videos');
 });
 
+test('a partial expiry claim deletes only the scene that reached its own deadline',async()=>{
+  const calls=[];
+  const expiredScene=job.scene_paths[0];
+  const result=await deleteJobOutputs({async remove(bucket,paths){calls.push({bucket,paths});return {error:null};}},{
+    ...job,final_path:null,reference_path:null,scene_paths:[expiredScene],
+  });
+
+  assert.deepEqual(result,{ok:true,failures:[]});
+  assert.deepEqual(calls,[{bucket:'brand-videos',paths:[expiredScene.path]}]);
+});
+
 test('rejects a path belonging to another job before calling Storage',async()=>{
   const calls=[];
   const result=await deleteJobOutputs({async remove(bucket,paths){calls.push({bucket,paths});return {error:null};}},{

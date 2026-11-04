@@ -165,21 +165,31 @@ function formatRemaining(milliseconds) {
 }
 
 function updateRetentionCountdowns() {
-  document.querySelectorAll('.retention-timer[data-expiry]').forEach(timer=>{
+  document.querySelectorAll('.job-thumbnail[data-expiry]').forEach(image=>{
+    if(!image.dataset.expiry||Date.parse(image.dataset.expiry)>Date.now())return;
+    image.hidden=true;image.removeAttribute('src');
+    const card=image.closest('.job-card'),key=`${card?.dataset.jobId}:${image.dataset.expiry}`;
+    if(card?.dataset.jobId&&!retentionExpiredRefreshes.has(key)){retentionExpiredRefreshes.add(key);refreshJobs();}
+  });
+  document.querySelectorAll('.retention-timer[data-expiry],.scene-expiry-timer[data-expiry]').forEach(timer=>{
     const remaining=Date.parse(timer.dataset.expiry)-Date.now();
     timer.textContent=remaining>0?formatRemaining(remaining):'đang chờ máy chủ xác nhận xóa';
-    const notice=timer.closest('.retention-state');
+    const notice=timer.classList.contains('retention-timer')?timer.closest('.retention-state'):null;
     notice?.classList.toggle('retention-active',remaining>10*60*1000);
     notice?.classList.toggle('retention-warning',remaining<=10*60*1000&&remaining>5*60*1000);
     notice?.classList.toggle('retention-urgent',remaining<=5*60*1000);
     if(remaining<=0){
       const card=timer.closest('.job-card');
-      card?.querySelectorAll('.view-video,.download-final,.video-slot').forEach(element=>{
-        if(element.matches('.video-slot'))element.replaceChildren();
-        else {element.disabled=true;element.hidden=true;}
+      card?.querySelectorAll('.view-video,.download-final').forEach(element=>{
+        if(Date.parse(element.dataset.expiry||'')<=Date.now()){
+          element.disabled=true;element.hidden=true;
+          const slotId=element.dataset.slot;
+          const slot=slotId?document.getElementById(slotId):card.querySelector(`#video-${CSS.escape(card.dataset.jobId)}`);
+          slot?.replaceChildren();
+        }
       });
-      const jobId=card?.dataset.jobId;
-      if(jobId&&!retentionExpiredRefreshes.has(jobId)){retentionExpiredRefreshes.add(jobId);refreshJobs();}
+      const refreshKey=`${card?.dataset.jobId}:${timer.dataset.expiry}`;
+      if(card?.dataset.jobId&&!retentionExpiredRefreshes.has(refreshKey)){retentionExpiredRefreshes.add(refreshKey);refreshJobs();}
     }
   });
 }
@@ -187,19 +197,20 @@ function updateRetentionCountdowns() {
 function retentionMarkup(job) {
   if(job.status!=='done')return '';
   if(job.retention_status==='expired')return '<div class="expired-label retention-state" role="status">Đã hết hạn – File đã được xóa</div>';
-  if(job.retention_status==='deleting')return '<div class="expiry-warning retention-state" role="status">Đã hết thời hạn lưu; hệ thống đang xác nhận xóa file.</div>';
-  if(job.retention_status==='delete_failed'&&job.retention_next_attempt_at)return `<div class="expiry-warning retention-state" role="status">Đã quá thời hạn lưu. Hệ thống sẽ thử xóa lại (lần ${Number(job.retention_attempts||0)}/5); chưa xác nhận file đã được xóa.</div>`;
-  if(job.retention_status==='delete_failed')return '<div class="expiry-warning retention-state" role="status">Hệ thống chưa xóa được file sau các lần thử lại. File chưa được xác nhận đã xóa; quản trị viên cần kiểm tra.</div>';
-  if(job.retention_status==='active'&&job.output_expires_at){
+  let warning='';
+  if(job.retention_status==='deleting')warning='<div class="expiry-warning retention-state" role="status">Một số file đã hết hạn; hệ thống đang xác nhận xóa. File còn hạn vẫn khả dụng.</div>';
+  else if(job.retention_status==='delete_failed'&&job.retention_next_attempt_at)warning=`<div class="expiry-warning retention-state" role="status">Hệ thống sẽ thử xóa lại file đã hết hạn (lần ${Number(job.retention_attempts||0)}/5); file chưa xác nhận xóa vẫn bị ẩn.</div>`;
+  else if(job.retention_status==='delete_failed')warning='<div class="expiry-warning retention-state" role="status">Không xóa được một số file sau các lần thử lại. File đã quá hạn vẫn bị khóa; quản trị viên cần kiểm tra.</div>';
+  if(job.final_path&&job.output_expires_at){
     const remaining=Date.parse(job.output_expires_at)-Date.now();
-    return `<div class="expiry-warning retention-state ${remaining<=5*60*1000?'retention-urgent':remaining<=10*60*1000?'retention-warning':'retention-active'}" role="status"><span>Ảnh/video của bạn đã được tạo thành công. File chỉ được lưu trong 60 phút và sẽ tự động xóa. Vui lòng tải về thiết bị để tránh mất dữ liệu.</span><strong class="retention-badge">Thời gian còn lại: <span class="retention-timer" data-expiry="${safe(job.output_expires_at)}">${remaining>0?formatRemaining(remaining):'đang chờ máy chủ xác nhận xóa'}</span></strong></div>`;
+    return `${warning}<div class="expiry-warning retention-state ${remaining<=5*60*1000?'retention-urgent':remaining<=10*60*1000?'retention-warning':'retention-active'}" role="status"><span>Ảnh/video của bạn đã được tạo thành công. Mỗi file tự động xóa sau 60 phút kể từ khi file đó tạo xong. Vui lòng tải về thiết bị trước khi hết hạn.</span><strong class="retention-badge">Video hoàn chỉnh còn: <span class="retention-timer" data-expiry="${safe(job.output_expires_at)}">${remaining>0?formatRemaining(remaining):'đang chờ máy chủ xác nhận xóa'}</span></strong></div>`;
   }
-  if(job.retention_status&&job.retention_status!=='active')return '<div class="expiry-warning retention-state" role="status">Không xác định được thời hạn lưu file. Tải xuống ngay nếu file còn khả dụng.</div>';
+  if(warning)return warning;
   return '<div class="retention-badge retention-state" role="status">Kết quả được tạo trước khi áp dụng thời hạn lưu tự động.</div>';
 }
 
 function mediaStillAvailable(retentionStatus,expiresAt) {
-  return !['deleting','expired','delete_failed'].includes(retentionStatus)&&(!expiresAt||Date.parse(expiresAt)>Date.now());
+  return retentionStatus!=='expired'&&(!expiresAt||Date.parse(expiresAt)>Date.now());
 }
 
 function canDownloadFinal(job) {
@@ -306,7 +317,7 @@ async function refreshJobs({force=false}={}) {
   if(!session||!document.querySelector('#jobs-list'))return;
   if(!force&&[...document.querySelectorAll('.script-editor')].some(editor=>editor.contains(document.activeElement)||editor.dataset.dirty==='true'||editor.dataset.busy==='true'))return;
   const userId=session.user.id,version=++jobsRefreshVersion;
-  const result=await supabase.from('brand_jobs').select('id,user_id,content,scene_count,scene_seconds,status,current_scene,reference_path,reference_sha256,final_path,output_expires_at,retention_status,retention_attempts,retention_next_attempt_at,error,error_code,retryable,attempt,max_attempts,schema_version,workflow_phase,script_revision,allow_summarize,plan,created_at,brand_scenes(scene_index,prompt,dialogue,action,planned_seconds,status,output_path,error,error_code,generation)',{count:'exact'}).eq('user_id',userId).order('created_at',{ascending:false}).order('id',{ascending:false}).range(0,jobsVisibleCount-1);
+  const result=await supabase.from('brand_jobs').select('id,user_id,content,scene_count,scene_seconds,status,current_scene,reference_path,reference_expires_at,reference_sha256,final_path,output_expires_at,retention_status,retention_attempts,retention_next_attempt_at,error,error_code,retryable,attempt,max_attempts,schema_version,workflow_phase,script_revision,allow_summarize,plan,created_at,brand_scenes(scene_index,prompt,dialogue,action,planned_seconds,status,output_path,output_expires_at,error,error_code,generation)',{count:'exact'}).eq('user_id',userId).order('created_at',{ascending:false}).order('id',{ascending:false}).range(0,jobsVisibleCount-1);
   const list=document.querySelector('#jobs-list');if(!list||session?.user.id!==userId||version!==jobsRefreshVersion)return;
   if(!force&&[...list.querySelectorAll('.script-editor')].some(editor=>editor.contains(document.activeElement)||editor.dataset.dirty==='true'||editor.dataset.busy==='true'))return;
   if(result.error){list.textContent='Không tải được lịch sử: '+result.error.message;updateJobsPagination();return;}
@@ -325,7 +336,10 @@ async function refreshJobs({force=false}={}) {
   const openMedia=new Map([...list.querySelectorAll('.video-slot')].filter(slot=>{
     if(!slot.querySelector('video'))return false;
     const job=result.data.find(item=>slot.id===`video-${item.id}`||slot.id.startsWith(`video-${item.id}-scene-`));
-    return job&&job.retention_status!=='deleting'&&job.retention_status!=='expired'&&job.retention_status!=='delete_failed'&&(!job.output_expires_at||Date.parse(job.output_expires_at)>Date.now());
+    if(!job)return false;
+    const sceneIndex=Number(slot.id.match(/-scene-(\d+)$/)?.[1]);
+    const scene=sceneIndex?job.brand_scenes?.find(item=>item.scene_index===sceneIndex):null;
+    return mediaStillAvailable(job.retention_status,scene?scene.output_expires_at:job.output_expires_at);
   }).map(slot=>[slot.id,slot]));
   const status={uploading:'Đang chờ ảnh',queued:'Đang chờ',script_queued:'Chờ tạo kịch bản',planning:'Đang viết kịch bản',script_ready:'Chờ bạn duyệt',video_queued:'Chờ tạo video',generating:'Đang tạo video',joining:'Đang ghép video',done:'Hoàn tất',error:'Lỗi',needs_review:'Lỗi',reviewed:'Lỗi'};
   list.innerHTML=result.data.map(job=>{
@@ -338,11 +352,11 @@ async function refreshJobs({force=false}={}) {
   result.data.forEach(async(job,index)=>{
     if(!job.reference_path)return;
     const thumbnail=list.children[index]?.querySelector('.job-thumbnail');if(!thumbnail)return;
-    const ttl=job.output_expires_at?Math.max(1,Math.floor((Date.parse(job.output_expires_at)-Date.now())/1000)):3600;
-    if(ttl<=0||!mediaStillAvailable(job.retention_status,job.output_expires_at))return;
+    const ttl=job.reference_expires_at?Math.max(1,Math.floor((Date.parse(job.reference_expires_at)-Date.now())/1000)):3600;
+    if(ttl<=0||!mediaStillAvailable(job.retention_status,job.reference_expires_at))return;
     const {data,error}=await supabase.storage.from('brand-references').createSignedUrl(job.reference_path,Math.min(3600,ttl));
-    if(error||!thumbnail.isConnected||!mediaStillAvailable(job.retention_status,job.output_expires_at))return;
-    thumbnail.src=data.signedUrl;thumbnail.hidden=false;
+    if(error||!thumbnail.isConnected||!mediaStillAvailable(job.retention_status,job.reference_expires_at))return;
+    thumbnail.src=data.signedUrl;thumbnail.dataset.expiry=job.reference_expires_at||'';thumbnail.hidden=false;
   });
   result.data.forEach((job,i)=>{
     const track=list.children[i]?.querySelector('.scene-track');if(!track)return;
@@ -351,9 +365,12 @@ async function refreshJobs({force=false}={}) {
     track.innerHTML=Array.from({length:job.scene_count},(_,index)=>{
       const scene=job.brand_scenes?.find(item=>item.scene_index===index+1),state=scene?.status||'waiting';
       const slotId=`video-${job.id}-scene-${index+1}`;
+      const sceneExpiry=scene?.output_expires_at||'';
+      const sceneRemaining=sceneExpiry?Date.parse(sceneExpiry)-Date.now():null;
+      const sceneTimer=sceneExpiry?`<small class="scene-expiry">Còn: <span class="scene-expiry-timer" data-expiry="${safe(sceneExpiry)}">${sceneRemaining>0?formatRemaining(sceneRemaining):'đang chờ máy chủ xác nhận xóa'}</span></small>`:'';
       const canResume=state==='error'&&job.status==='error'&&job.retryable&&job.attempt<job.max_attempts;
       const canRestart=sceneRetryAvailable&&state==='error'&&job.status==='error'&&job.schema_version===3&&!canResume&&['MUSE_OUTPUT_REJECTED','SCENE_MEDIA_INVALID','CUT_OFF_SPEECH','SPEECH_TOO_SHORT','SPEECH_TIMING','SPEECH_MISMATCH','UNEXPECTED_SPEECH'].includes(scene?.error_code);
-      return `<div class="scene-row"><span class="scene-pill ${safe(state)}">${String(index+1).padStart(2,'0')}</span><span>Đoạn ${index+1}/${job.scene_count}: <strong>${safe(labels[state]||state)}</strong>${state==='generating'?` · lần ${Number(scene?.generation||0)%3+1}/3`:''}${scene?.error&&state==='error'?`<small class="job-error">${safe(scene.error)}</small>`:''}</span>${state==='done'&&scene.output_path&&mediaStillAvailable(job.retention_status,job.output_expires_at)?`<button class="outline view-video view-scene" type="button" data-path="${safe(scene.output_path)}" data-id="${safe(job.id)}" data-scene="${index+1}" data-slot="${safe(slotId)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(job.output_expires_at||'')}">Xem đoạn</button>`:canResume?`<button class="outline retry-job" type="button" data-id="${safe(job.id)}">Tiếp tục từ đoạn ${index+1}</button>`:canRestart?`<button class="outline retry-scene" type="button" data-id="${safe(job.id)}" data-scene="${index+1}">Tạo lại đoạn ${index+1}</button>`:''}<div class="video-slot" id="${safe(slotId)}"></div></div>`;
+      return `<div class="scene-row"><span class="scene-pill ${safe(state)}">${String(index+1).padStart(2,'0')}</span><span>Đoạn ${index+1}/${job.scene_count}: <strong>${safe(labels[state]||state)}</strong>${state==='generating'?` · lần ${Number(scene?.generation||0)%3+1}/3`:''}${scene?.error&&state==='error'?`<small class="job-error">${safe(scene.error)}</small>`:''}${state==='done'?sceneTimer:''}</span>${state==='done'&&scene.output_path&&mediaStillAvailable(job.retention_status,scene.output_expires_at)?`<button class="outline view-video view-scene" type="button" data-path="${safe(scene.output_path)}" data-id="${safe(job.id)}" data-scene="${index+1}" data-slot="${safe(slotId)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(scene.output_expires_at||'')}">Xem đoạn</button>`:canResume?`<button class="outline retry-job" type="button" data-id="${safe(job.id)}">Tiếp tục từ đoạn ${index+1}</button>`:canRestart?`<button class="outline retry-scene" type="button" data-id="${safe(job.id)}" data-scene="${index+1}">Tạo lại đoạn ${index+1}</button>`:''}<div class="video-slot" id="${safe(slotId)}"></div></div>`;
     }).join('');
   });
   for(const [id,slot] of openMedia){

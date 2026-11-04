@@ -25,11 +25,11 @@ test('history pages three at a time and retention states survive reload without 
   };
   const jobs=[
     {id:'aaaaaaaa-0000-4000-8000-000000000001',user_id:owner,content:'Active video for the first member',scene_count:1,scene_seconds:10,status:'done',final_path:`${paths.active}/final.mp4`,reference_path:`${paths.active}/reference`,output_expires_at:new Date(now+45*60*1000).toISOString(),retention_status:'active'},
-    {id:'aaaaaaaa-0000-4000-8000-000000000002',user_id:owner,content:'Deletion in progress',scene_count:1,scene_seconds:10,status:'done',final_path:`${paths.deleting}/final.mp4`,reference_path:`${paths.deleting}/reference`,output_expires_at:new Date(now-60_000).toISOString(),retention_status:'deleting'},
-    {id:'aaaaaaaa-0000-4000-8000-000000000003',user_id:owner,content:'Expired timestamp awaiting server confirmation',scene_count:1,scene_seconds:10,status:'done',final_path:`${paths.overdue}/final.mp4`,reference_path:`${paths.overdue}/reference`,output_expires_at:new Date(now-1000).toISOString(),retention_status:'active'},
-    {id:'aaaaaaaa-0000-4000-8000-000000000004',user_id:owner,content:'Confirmed deleted output',scene_count:1,scene_seconds:10,status:'done',final_path:null,reference_path:`${paths.expired}/reference`,output_expires_at:new Date(now-120_000).toISOString(),retention_status:'expired'},
-    {id:'aaaaaaaa-0000-4000-8000-000000000005',user_id:owner,content:'Deletion retry pending',scene_count:1,scene_seconds:10,status:'done',final_path:`${paths.failed}/final.mp4`,reference_path:`${paths.failed}/reference`,output_expires_at:new Date(now-180_000).toISOString(),retention_status:'delete_failed'},
-  ].map((job,index)=>({...job,created_at:new Date(now-index*1000).toISOString(),brand_scenes:[]}));
+    {id:'aaaaaaaa-0000-4000-8000-000000000002',user_id:owner,content:'One scene expired while later files remain active',scene_count:2,scene_seconds:10,status:'done',final_path:`${paths.deleting}/final.mp4`,reference_path:`${paths.deleting}/reference`,reference_expires_at:new Date(now+35*60*1000).toISOString(),output_expires_at:new Date(now+30*60*1000).toISOString(),retention_status:'deleting',brand_scenes:[{scene_index:1,status:'done',output_path:`${paths.deleting}/scene-01.mp4`,output_expires_at:new Date(now-60_000).toISOString()},{scene_index:2,status:'done',output_path:`${paths.deleting}/scene-02.mp4`,output_expires_at:new Date(now+20*60*1000).toISOString()}]},
+    {id:'aaaaaaaa-0000-4000-8000-000000000003',user_id:owner,content:'Expired timestamp awaiting server confirmation',scene_count:1,scene_seconds:10,status:'done',final_path:`${paths.overdue}/final.mp4`,reference_path:`${paths.overdue}/reference`,reference_expires_at:new Date(now-1000).toISOString(),output_expires_at:new Date(now-1000).toISOString(),retention_status:'active'},
+    {id:'aaaaaaaa-0000-4000-8000-000000000004',user_id:owner,content:'Confirmed deleted output',scene_count:1,scene_seconds:10,status:'done',final_path:null,reference_path:null,output_expires_at:new Date(now-120_000).toISOString(),retention_status:'expired'},
+    {id:'aaaaaaaa-0000-4000-8000-000000000005',user_id:owner,content:'Deletion retry pending',scene_count:1,scene_seconds:10,status:'done',final_path:`${paths.failed}/final.mp4`,reference_path:`${paths.failed}/reference`,reference_expires_at:new Date(now-180_000).toISOString(),output_expires_at:new Date(now-180_000).toISOString(),retention_status:'delete_failed'},
+  ].map((job,index)=>({...job,created_at:new Date(now-index*1000).toISOString(),reference_expires_at:job.reference_expires_at||null,brand_scenes:job.brand_scenes||[]}));
   const historyQueries=[],referenceSignPaths=[],videoSignPaths=[];
   await page.route('**/*',async route=>{
     const request=route.request(),url=new URL(request.url());
@@ -67,26 +67,28 @@ test('history pages three at a time and retention states survive reload without 
   assert.match(await page.locator('.retention-timer').first().innerText(),/^4[4-5] phút \d{2} giây$/,'countdown should derive from the server expiry timestamp');
   await page.reload();await page.locator('#jobs-list .job-card').first().waitFor({timeout:20000});
   assert.match(await page.locator('.retention-timer').first().innerText(),/^4[4-5] phút \d{2} giây$/,'reload should reconstruct the same countdown from persisted expiry');
-  assert.deepEqual(referenceSignPaths,[jobs[0].reference_path,jobs[0].reference_path],'only an active, unexpired reference may be signed across the reload');
-  assert.equal(await page.locator('#jobs-list .view-video').count(),1,'overdue or deleting output must not expose a view action');
-  assert.equal(await page.locator('#jobs-list .download-final').count(),1,'overdue or deleting output must not expose a download action');
+  assert.deepEqual(referenceSignPaths,[jobs[0].reference_path,jobs[1].reference_path,jobs[0].reference_path,jobs[1].reference_path],'only active, unexpired references may be signed across reloads');
+  assert.equal(await page.locator('#jobs-list .view-video').count(),3,'the unexpired final and later scene remain viewable while an earlier scene expires');
+  assert.equal(await page.locator('#jobs-list .download-final').count(),2,'an expired scene must not disable the still-valid final video');
+  const partialCard=page.locator(`.job-card[data-job-id="${jobs[1].id}"]`);
+  assert.equal(await partialCard.locator('.view-scene').count(),1,'only the later, unexpired scene may be previewed');
   assert.match(await page.locator('#jobs-list').innerText(),/đang chờ máy chủ xác nhận xóa/);
-  assert.match(await page.locator('#jobs-list').innerText(),/Đã hết thời hạn lưu; hệ thống đang xác nhận xóa file/);
+  assert.match(await page.locator('#jobs-list').innerText(),/Một số file đã hết hạn; hệ thống đang xác nhận xóa/);
 
   await page.locator('#jobs-pagination .jobs-more').click();
   await page.locator('#jobs-list').getByText('Deletion retry pending').waitFor();
   assert.equal(await page.locator('#jobs-list .job-card').count(),5,'load more should append the remaining history rows');
   assert.deepEqual(historyQueries.slice(-1),[{range:'',offset:'0',limit:'6'}],'load more should request only the first six rows');
   assert.match(await page.locator('#jobs-list').innerText(),/Đã hết hạn – File đã được xóa/);
-  assert.match(await page.locator('#jobs-list').innerText(),/chưa được xác nhận đã xóa/);
-  assert.equal(await page.locator('#jobs-list .view-video').count(),1);
-  assert.ok(referenceSignPaths.length>=2&&referenceSignPaths.every(filePath=>filePath===jobs[0].reference_path),'expired, deleting, failed, and overdue media never receive signed URLs');
+  assert.match(await page.locator('#jobs-list').innerText(),/Không xóa được một số file sau các lần thử lại/);
+  assert.equal(await page.locator('#jobs-list .view-video').count(),3);
+  assert.ok(referenceSignPaths.length>=2&&referenceSignPaths.every(filePath=>[jobs[0].reference_path,jobs[1].reference_path].includes(filePath)),'expired, failed, and overdue references never receive signed URLs');
 
   await page.locator('#jobs-pagination .jobs-collapse').click();
   await page.waitForFunction(()=>document.querySelectorAll('#jobs-list .job-card').length===3);
   assert.equal(await page.locator('#jobs-list .job-card').count(),3,'collapse returns the list to three rows');
   assert.deepEqual(historyQueries.slice(-1),[{range:'',offset:'0',limit:'3'}]);
-  await page.locator('#jobs-list .view-video').click();
+  await page.locator('#jobs-list .view-video:not(.view-scene)').first().click();
   await page.locator('#jobs-list video').waitFor();
   assert.deepEqual(videoSignPaths,[jobs[0].final_path],'only the still-valid output can obtain a signed video URL');
 

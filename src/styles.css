@@ -309,6 +309,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 .scene-row .scene-pill { width: 30px; height: 30px; }
 .scene-row strong { color: var(--ink); }
+.scene-expiry { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
 .scene-row .video-slot { grid-column: 2 / -1; width: min(100%, 360px); }
 .scene-row video, .video-slot video { display: block; width: 100%; max-height: 380px; border-radius: 12px; background: #121722; }
 .scene-row .job-error { display: block; margin-top: 5px; color: var(--danger); font-size: 11px; }

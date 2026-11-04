@@ -11,41 +11,50 @@ declare
   pending_id constant uuid := '99000000-0000-4000-8000-000000000003';
   legacy_id constant uuid := '99000000-0000-4000-8000-000000000004';
   active_id constant uuid := '99000000-0000-4000-8000-000000000005';
+  partial_id constant uuid := '99000000-0000-4000-8000-000000000006';
 begin
   insert into public.brand_jobs(id,user_id,content,scene_count,scene_seconds,reference_path,status,final_path)
   values
     (retry_id,member_a,'Retention retry fixture',1,10,member_a::text||'/'||retry_id::text||'/reference','generating',member_a::text||'/'||retry_id::text||'/final.mp4'),
     (success_id,member_b,'Retention success fixture',1,10,member_b::text||'/'||success_id::text||'/reference','generating',member_b::text||'/'||success_id::text||'/final.mp4'),
     (pending_id,member_a,'Retention pending fixture',1,10,member_a::text||'/'||pending_id::text||'/reference','generating',null),
-    (active_id,member_a,'Retention active fixture',1,10,member_a::text||'/'||active_id::text||'/reference','generating',member_a::text||'/'||active_id::text||'/final.mp4');
+    (active_id,member_a,'Retention active fixture',1,10,member_a::text||'/'||active_id::text||'/reference','generating',member_a::text||'/'||active_id::text||'/final.mp4'),
+    (partial_id,member_b,'Per-file retention fixture',2,10,member_b::text||'/'||partial_id::text||'/reference','generating',member_b::text||'/'||partial_id::text||'/final.mp4');
 
-  -- A done row inserted as history is deliberately not backfilled or swept.
+  -- This done row has no stored output and therefore receives no new expiry.
   insert into public.brand_jobs(id,user_id,content,scene_count,scene_seconds,reference_path,status,final_path)
-  values(legacy_id,member_a,'Legacy retention fixture',1,10,member_a::text||'/'||legacy_id::text||'/reference','done',member_a::text||'/'||legacy_id::text||'/final.mp4');
+  values(legacy_id,member_a,'Legacy retention fixture',1,10,member_a::text||'/'||legacy_id::text||'/reference','done',null);
 
-  update public.brand_jobs set status='done' where id in (retry_id,success_id,active_id);
+  update public.brand_jobs set status='done' where id in (retry_id,success_id,active_id,partial_id);
   if not exists(select 1 from public.brand_jobs where id=retry_id
       and output_expires_at between clock_timestamp()+interval '59 minutes' and clock_timestamp()+interval '61 minutes'
+      and reference_expires_at between clock_timestamp()+interval '59 minutes' and clock_timestamp()+interval '61 minutes'
       and retention_status='active') then
-    raise exception 'A successful done transition did not start the server-side 60 minute window';
+    raise exception 'A successful job did not start the server-side 60 minute reference/final windows';
   end if;
   if (select output_expires_at from public.brand_jobs where id=legacy_id) is not null then
     raise exception 'A historical done row was backfilled';
   end if;
 
-  update public.brand_jobs set output_expires_at=now()-interval '1 second' where id in (retry_id,success_id);
+  update public.brand_jobs set output_expires_at=now()-interval '1 second',reference_expires_at=now()-interval '1 second' where id in (retry_id,success_id);
   -- A pending job with an old timestamp remains ineligible; a successful active
   -- job and legacy history remain readable until their applicable expiry.
   update public.brand_jobs set output_expires_at=now()-interval '1 second' where id=pending_id;
   insert into public.brand_scenes(job_id,scene_index,prompt,dialogue,status,output_path)
   values
     (retry_id,1,'same character','retry dialogue','done',member_a::text||'/'||retry_id::text||'/scene-01.mp4'),
-    (success_id,1,'same character','success dialogue','done',member_b::text||'/'||success_id::text||'/scene-01.mp4');
+    (success_id,1,'same character','success dialogue','done',member_b::text||'/'||success_id::text||'/scene-01.mp4'),
+    (partial_id,1,'same character','expired scene','done',member_b::text||'/'||partial_id::text||'/scene-01.mp4'),
+    (partial_id,2,'same character','later scene','done',member_b::text||'/'||partial_id::text||'/scene-02.mp4');
+  update public.brand_scenes set output_expires_at=now()-interval '1 second'
+    where job_id in (retry_id,success_id) or (job_id=partial_id and scene_index=1);
   insert into storage.objects(bucket_id,name) values
     ('brand-videos',member_a::text||'/'||active_id::text||'/final.mp4'),
     ('brand-references',member_a::text||'/'||active_id::text||'/reference'),
     ('brand-videos',member_b::text||'/'||success_id::text||'/final.mp4'),
-    ('brand-references',member_b::text||'/'||success_id::text||'/reference');
+    ('brand-references',member_b::text||'/'||success_id::text||'/reference'),
+    ('brand-videos',member_b::text||'/'||partial_id::text||'/scene-01.mp4'),
+    ('brand-videos',member_b::text||'/'||partial_id::text||'/scene-02.mp4');
 end $$;
 
 set local role authenticated;
@@ -73,9 +82,11 @@ declare
   success_id constant uuid := '99000000-0000-4000-8000-000000000002';
   pending_id constant uuid := '99000000-0000-4000-8000-000000000003';
   legacy_id constant uuid := '99000000-0000-4000-8000-000000000004';
+  partial_id constant uuid := '99000000-0000-4000-8000-000000000006';
   retry_claim record;
   success_claim record;
   next_claim record;
+  partial_claim record;
   attempt_number integer;
   expected_delay interval;
 begin
@@ -93,6 +104,21 @@ begin
   if exists(select 1 from public.claim_expired_brand_outputs(20) where job_id in (retry_id,success_id,pending_id,legacy_id)) then
     raise exception 'A live claim was duplicated, or a pending/legacy job was selected';
   end if;
+  select * into partial_claim from public.claim_expired_brand_outputs(20) where job_id=partial_id;
+  if partial_claim.job_id is null or partial_claim.final_path is not null or partial_claim.reference_path is not null
+    or jsonb_array_length(partial_claim.scene_paths)<>1
+    or partial_claim.scene_paths->0->>'path'<>'3cda2513-82f4-4b80-9918-41f42d8839fb/99000000-0000-4000-8000-000000000006/scene-01.mp4' then
+    raise exception 'Claim did not isolate only the individually expired scene';
+  end if;
+  perform public.complete_expired_brand_output(partial_id,partial_claim.retention_claim_token,true,null,
+    partial_claim.final_path,partial_claim.reference_path,partial_claim.scene_paths);
+  if not exists(select 1 from public.brand_jobs where id=partial_id and retention_status='active' and final_path is not null and reference_path is not null) then
+    raise exception 'Partial cleanup incorrectly marked the entire job expired or cleared later outputs';
+  end if;
+  if (select output_path from public.brand_scenes where job_id=partial_id and scene_index=1) is not null
+    or (select output_path from public.brand_scenes where job_id=partial_id and scene_index=2) is null then
+    raise exception 'Partial cleanup did not clear exactly the expired scene path';
+  end if;
 
   -- A stale invocation is fenced out after the lease is reclaimed.
   update public.brand_jobs set retention_claimed_at=clock_timestamp()-interval '16 minutes' where id=success_id;
@@ -101,12 +127,14 @@ begin
     raise exception 'Stale deletion lease was not safely reclaimed';
   end if;
   begin
-    perform public.complete_expired_brand_output(success_id,success_claim.retention_claim_token,true,null);
+    perform public.complete_expired_brand_output(success_id,success_claim.retention_claim_token,true,null,
+      success_claim.final_path,success_claim.reference_path,success_claim.scene_paths);
     raise exception 'STALE_RETENTION_TOKEN_ACCEPTED';
   exception when raise_exception then
     if sqlerrm='STALE_RETENTION_TOKEN_ACCEPTED' then raise; end if;
   end;
-  perform public.complete_expired_brand_output(success_id,next_claim.retention_claim_token,true,null);
+  perform public.complete_expired_brand_output(success_id,next_claim.retention_claim_token,true,null,
+    next_claim.final_path,next_claim.reference_path,next_claim.scene_paths);
   if not exists(select 1 from public.brand_jobs where id=success_id and retention_status='expired' and final_path is null and retention_deleted_at is not null) then
     raise exception 'Successful deletion did not mark the record expired and clear the final path';
   end if;
@@ -155,6 +183,12 @@ do $$
 begin
   if exists(select 1 from storage.objects where name='3cda2513-82f4-4b80-9918-41f42d8839fb/99000000-0000-4000-8000-000000000002/final.mp4') then
     raise exception 'Owner can read a file after successful expiration';
+  end if;
+  if exists(select 1 from storage.objects where name='3cda2513-82f4-4b80-9918-41f42d8839fb/99000000-0000-4000-8000-000000000006/scene-01.mp4') then
+    raise exception 'The expired scene remained readable after its path was cleared';
+  end if;
+  if not exists(select 1 from storage.objects where name='3cda2513-82f4-4b80-9918-41f42d8839fb/99000000-0000-4000-8000-000000000006/scene-02.mp4') then
+    raise exception 'An unexpired scene became unreadable when another scene expired';
   end if;
 end $$;
 reset role;

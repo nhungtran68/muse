@@ -46,7 +46,7 @@ Deno.serve(async (request) => {
   }
 
   const jobs = (data ?? []) as RetentionClaim[];
-  const summary = { claimed: jobs.length, expired: 0, retry_scheduled: 0, terminal_failures: 0, claim_failures: 0 };
+  const summary = { claimed: jobs.length, expired: 0, partially_cleaned: 0, retry_scheduled: 0, terminal_failures: 0, claim_failures: 0 };
 
   for (const job of jobs) {
     const result = await deleteJobOutputs({
@@ -79,6 +79,9 @@ Deno.serve(async (request) => {
       p_claim_token: job.retention_claim_token,
       p_success: result.ok,
       p_error: result.ok ? null : "STORAGE_DELETE_FAILED",
+      p_final_path: job.final_path,
+      p_reference_path: job.reference_path,
+      p_scene_paths: job.scene_paths,
     });
 
     if (completionError) {
@@ -92,7 +95,8 @@ Deno.serve(async (request) => {
     }
 
     if (result.ok) {
-      summary.expired++;
+      if (completed?.retention_status === "expired") summary.expired++;
+      else summary.partially_cleaned++;
     } else if (completed?.retention_next_attempt_at) {
       summary.retry_scheduled++;
     } else {
