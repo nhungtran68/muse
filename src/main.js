@@ -230,7 +230,7 @@ async function refreshJobs({force=false}={}) {
     sceneRetryAvailable=probe.error?.message==='Không tìm thấy yêu cầu';
   }
   if(session?.user.id!==userId||version!==jobsRefreshVersion)return;
-  const signature=JSON.stringify(result.data);
+  const signature=JSON.stringify([sceneRetryAvailable,result.data]);
   if(signature===jobsSignature)return;
   jobsSignature=signature;
   if(!result.data.length){list.innerHTML='<div class="empty"><strong>Chưa có video nào</strong></div>';return;}

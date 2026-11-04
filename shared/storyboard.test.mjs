@@ -32,11 +32,13 @@ test('accepts only matching speech with a complete ending inside duration',()=>{
   assert.equal(checkTranscript('', 'Xin chào',words,10).ok,false);
 });
 
-test('accepts a Southern x/s homophone inside an otherwise complete ending, never a missing final word',()=>{
+test('accepts a one-letter ASR variant in an otherwise complete ending, never a missing final word',()=>{
   const expected='Chất chống oxy hóa giúp tăng năng lượng, hỗ trợ tim mạch và xương khớp.';
   const words=[{start:.3,end:1},{start:8.1,end:8.5}];
   assert.equal(checkTranscript(expected,'Chất trống oxy hóa giúp tăng năng lượng, hỗ trợ tim mạch và sương khớp.',words,10).ok,true);
   assert.equal(checkTranscript(expected,'Chất trống oxy hóa giúp tăng năng lượng, hỗ trợ tim mạch và sương.',words,10).reason,'CUT_OFF_SPEECH');
+  assert.equal(checkTranscript('Mình muốn giới thiệu tên thương hiệu đến với mọi người một cách gần gũi.','Mình muốn giới thiệu tên thương hiệu đến với mọi người một cách gần hũi.',words,10).ok,true);
+  assert.equal(checkTranscript('Mình muốn giới thiệu tên thương hiệu đến với mọi người một cách gần gũi.','Mình muốn giới thiệu tên thương hiệu đến với mọi người một cách gần.',words,10).reason,'CUT_OFF_SPEECH');
 });
 test('extracts matching JSON despite unrelated text',()=>{
   const data=fixture(),input='text '+JSON.stringify(data)+' trailing';
