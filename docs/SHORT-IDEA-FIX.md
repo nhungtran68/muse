@@ -1,4 +1,4 @@
-# Sửa luồng ý tưởng ngắn — worker 2.0.1
+# Sửa luồng ý tưởng ngắn — worker 2.0.2
 
 Ngày kiểm tra: 04/11/2026. Web: https://muse-brand-studio.vercel.app/.
 
@@ -14,18 +14,25 @@ Yêu cầu `e705b190-5612-4c35-89e7-1f63f3cc244b` có nội dung “Giơi thiệ
 - Chặn cảnh giữ chỗ trước khi kiểm tra độ dài hoặc tạo bất kỳ video nào. `needs_input`/cảnh “chờ bổ sung” chuyển sang lỗi rõ ràng `CONTENT_INSUFFICIENT`, không gửi lặp cùng yêu cầu vô ích.
 - Web giải thích cách AI xử lý ý tưởng ngắn. Yêu cầu lỗi kịch bản có nút **Chỉnh nội dung**, lấy lại đúng ảnh và dữ liệu của người sở hữu; kiểm tra mã băm ảnh và ngăn kết quả tải chậm đi vào tài khoản khác sau đăng xuất.
 - Worker ghi phiên bản trong trạng thái khởi động và dòng sẵn sàng để xác nhận đúng bản đang chạy. Không thay đổi quyền thành viên, hàng đợi hoặc giới hạn thử lại.
+- Khi chạy chính job trên web, đã phát hiện thêm lỗi nhận dạng: “Đại Ngân Farm ạ” bị ghi thành “đại ngân pha mà”, gây báo nhầm `CUT_OFF_SPEECH`. Bản 2.0.2 thử nhận dạng lại cùng file bằng danh sách tên riêng được trích từ chính lời thoại và có trong nội dung gốc. Không cung cấp cả câu mong muốn cho bộ nhận dạng; số tiếng gợi ý tối đa 25% câu, không quá 8 tiếng. Vẫn yêu cầu câu kết khớp, thời gian và độ dài giọng nói đạt chuẩn; bản nhận dạng lại không được tự kéo dài thời điểm kết thúc quá 0,12 giây. Giữ lại cả nhận dạng ban đầu trong nhật ký kiểm tra.
 
 ## Kết quả kiểm tra
 
 | Trường hợp | Kết quả |
 | --- | --- |
-| Bộ kiểm thử tự động toàn dự án | 31/31 đạt, không bỏ qua bài nào |
+| Bộ kiểm thử tự động toàn dự án bản 2.0.2 | 34/34 đạt, không bỏ qua bài nào |
+| Kiểm thử bổ sung tên riêng, lời kết bị cắt và giới hạn từ gợi ý | 3/3 đạt, đã nằm trong bộ kiểm thử toàn dự án |
 | Dựng bản web | Đạt |
 | Kiểm tra cú pháp và khoảng trắng bản sửa | Đạt |
 | Phản hồi giữ chỗ giống lỗi khách gửi | Bị chặn bằng `CONTENT_INSUFFICIENT`, không tạo video |
 | Khôi phục nội dung và ảnh của job lỗi | Đạt trong trình duyệt kiểm thử với dữ liệu giả lập |
 | Đăng xuất khi ảnh khôi phục còn đang tải, đăng nhập người khác | Không điền nội dung/ảnh người cũ sang tài khoản mới |
 | Muse thật, cùng ảnh và cùng ý tưởng ngắn, 3 × 10 giây | Viết được đủ 3 cảnh, mỗi cảnh 27 tiếng; thời gian đọc ước tính 7,88 / 8,08 / 7,78 giây |
-| Tạo và ghép video của chính job trên web bằng worker 2.0.1 | Chờ khởi động lại worker và kiểm tra; chưa nghiệm thu bước này |
+| Chính job trên web, worker 2.0.1 | Lập được 3 cảnh, nhận được video cảnh 1 dài 10 giây; dừng do nhận dạng sai tên thương hiệu |
+| Video cảnh 1 thật với bộ nhận dạng 2.0.2 | Đạt, giọng nói 7,16 giây; từ vựng tên riêng sửa được lỗi nhận dạng |
+| Bản cùng video cố ý cắt mất phần “Farm ạ” | Bị từ chối `CUT_OFF_SPEECH`, giọng nói còn 6,68 giây |
+| Tạo và ghép video của chính job trên web bằng worker 2.0.2 | Chờ khởi động lại worker và kiểm tra; chưa nghiệm thu bước này |
 
 Phép thử Muse trực tiếp dùng cuộc trò chuyện thử riêng `2d8df960-bb1d-43a9-b056-480eb67e2be2`, chỉ lập kịch bản. Kết quả đó chưa chứng minh đã tạo được MP4. Chưa công bố hoàn thành toàn bộ luồng. Mode 5/8 giây vẫn chưa được bật.
+
+Tham chiếu kỹ thuật cho tùy chọn từ vựng nhận dạng: [mã nguồn faster-whisper](https://github.com/SYSTRAN/faster-whisper/blob/master/faster_whisper/transcribe.py). Khả năng này cũng đã được kiểm tra trên thư viện thật trong container `fb-whisper` của máy.

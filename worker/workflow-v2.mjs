@@ -73,7 +73,7 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
   await updateJob({status:'joining'});
   const final=path.join(dir,'final.mp4'),probe=await joinScenes(files,final,job.scene_count*job.scene_seconds);
   if(Math.abs(probe.duration-job.scene_count*job.scene_seconds)>=.7)throw Object.assign(Error('Video ghép sai tổng thời lượng yêu cầu.'),{code:'FINAL_DURATION_MISMATCH',retryable:false});
-  const finalAudit=await auditor.verify(final,{dialogue:plan.map(s=>s.dialogue).filter(Boolean).join(' ')},job.scene_count*job.scene_seconds);
+  const finalAudit=await auditor.verify(final,{dialogue:plan.map(s=>s.dialogue).filter(Boolean).join(' '),source_quotes:plan.flatMap(s=>s.source_quotes||[])},job.scene_count*job.scene_seconds);
   if(!finalAudit.ok)throw Object.assign(Error('Lời thoại trong video ghép chưa được xác nhận đầy đủ.'),{code:'FINAL_SPEECH_UNVERIFIED',retryable:false});
   const finalPath=`${job.user_id}/${job.id}/${job.claim_token}/final.mp4`;
   await upload(client,finalPath,final);
