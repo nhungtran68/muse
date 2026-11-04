@@ -1,4 +1,4 @@
-# Muse Brand Worker 3.0.2
+# Muse Brand Worker 3.0.3
 
 Worker chạy trên máy quản trị viên để dùng tài khoản Muse trên web. Giữ Docker Desktop, container `fb-whisper`, cửa sổ worker và Chrome Muse đang mở khi có yêu cầu. Worker chỉ giữ mật khẩu quản trị web trong phiên chạy; mỗi lần khởi động lại cần nhập mật khẩu trực tiếp trong cửa sổ worker.
 
