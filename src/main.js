@@ -1,5 +1,6 @@
 import {createClient} from '@supabase/supabase-js';
 import {adminEmail, supabaseKey, supabaseUrl} from './config.js';
+import {storyboardInput} from '../shared/storyboard.mjs';
 import './styles.css';
 
 const root = document.querySelector('#app');
@@ -64,6 +65,14 @@ function renderModule() {
   const duration=section.querySelector('.duration-box');
   duration.innerHTML=`<label for="scene-duration">Thời lượng mỗi cảnh</label><select id="scene-duration" ${modes.length?'':'disabled'}>${modes.map(mode=>`<option value="${mode.seconds}">${mode.seconds} giây</option>`).join('')}</select>${modes.length?'':'<small>Chưa có mode được xác nhận.</small>'}`;
   if(!modes.length)section.querySelector('.create-button').disabled=true;
+  const guidance=document.createElement('p');guidance.id='content-guidance';guidance.className='muted';guidance.setAttribute('aria-live','polite');
+  section.querySelector('#content').after(guidance);
+  const updateGuidance=()=>{
+    const content=section.querySelector('#content').value.trim(),scene_count=Number(section.querySelector('#scene-count').value),scene_seconds=Number(section.querySelector('#scene-duration').value)||settings.scene_seconds;
+    guidance.textContent=!content?'Nhập ý tưởng hoặc nội dung thô. AI tự viết kịch bản từ nội dung và ảnh; các thông tin thực tế về thương hiệu cần do bạn cung cấp.':storyboardInput({content,scene_count,scene_seconds}).kind==='brief'?`AI sẽ phát triển ý tưởng ngắn này thành ${scene_count} cảnh, thêm lời dẫn tự nhiên từ ảnh và ý tưởng, không tự bịa thông tin thương hiệu.`:'AI sẽ đọc toàn bộ nội dung, biên tập và chia thành các cảnh theo thời lượng đã chọn.';
+  };
+  for(const selector of ['#content','#scene-count','#scene-duration'])section.querySelector(selector).addEventListener('input',updateGuidance);
+  updateGuidance();
   const memberCode=document.createElement('p');memberCode.className='muted';memberCode.textContent=`Mã thành viên: ${session.user.id}`;
   section.querySelector('.form-header').after(memberCode);
   on('#reference','change',()=>{
@@ -107,7 +116,7 @@ async function submitBrand(event) {
     localStorage.removeItem(storageKey);
     if(session?.user.id!==userId)return;
     message('Đã nhận yêu cầu và đưa vào hàng chờ.','success');
-    document.querySelector('#create-form').reset();document.querySelector('#image-preview').hidden=true;document.querySelector('#file-name').textContent='Chọn hoặc kéo ảnh vào đây';
+    document.querySelector('#create-form').reset();document.querySelector('#content').dispatchEvent(new Event('input'));document.querySelector('#image-preview').hidden=true;document.querySelector('#file-name').textContent='Chọn hoặc kéo ảnh vào đây';
     await refreshJobs();document.querySelector('#jobs').scrollIntoView({behavior:'smooth'});
   }catch(error){if(session?.user.id===userId)message(error.message||'Không gửi được yêu cầu. Hãy thử lại.','error');}
   finally{if(button.isConnected){button.disabled=!settings?.enabled||!modes.length;button.textContent='Tạo video thương hiệu';}}
@@ -122,7 +131,7 @@ function renderJobs() {
 async function refreshJobs() {
   if(!session||!document.querySelector('#jobs-list'))return;
   const userId=session.user.id,version=++jobsRefreshVersion;
-  const result=await supabase.from('brand_jobs').select('id,user_id,content,scene_count,scene_seconds,status,current_scene,reference_path,reference_sha256,final_path,error,retryable,attempt,max_attempts,schema_version,created_at,brand_scenes(scene_index,prompt,dialogue,action,planned_seconds,status)').eq('user_id',userId).order('created_at',{ascending:false}).limit(50);
+  const result=await supabase.from('brand_jobs').select('id,user_id,content,scene_count,scene_seconds,status,current_scene,reference_path,reference_sha256,final_path,error,error_code,retryable,attempt,max_attempts,schema_version,created_at,brand_scenes(scene_index,prompt,dialogue,action,planned_seconds,status)').eq('user_id',userId).order('created_at',{ascending:false}).limit(50);
   const list=document.querySelector('#jobs-list');if(!list||session?.user.id!==userId||version!==jobsRefreshVersion)return;
   if(result.error){list.textContent='Không tải được lịch sử: '+result.error.message;return;}
   const signature=JSON.stringify(result.data);
@@ -131,6 +140,32 @@ async function refreshJobs() {
   if(!result.data.length){list.innerHTML='<div class="empty"><strong>Chưa có video nào</strong></div>';return;}
   const status={uploading:'Đang chờ',queued:'Đang chờ',planning:'Đang xử lý',generating:'Đang xử lý',joining:'Đang xử lý',done:'Hoàn tất',error:'Lỗi',needs_review:'Lỗi',reviewed:'Lỗi'};
   list.innerHTML=result.data.map(job=>`<article class="job-card"><div class="job-main"><div class="job-top"><span>${shortDate(job.created_at)}</span><span class="status status-${safe(job.status)}">${safe(status[job.status]||job.status)}</span></div><h3>${safe(job.content.slice(0,110))}</h3><p>${job.scene_count} cảnh · ${job.scene_seconds} giây/cảnh</p><small>Mã yêu cầu: ${safe(job.id)}</small>${job.error?`<p class="job-error">${safe(job.error)}</p>`:''}<div class="scene-track">${Array.from({length:job.scene_count},(_,i)=>{const scene=job.brand_scenes?.find(x=>x.scene_index===i+1);return `<span class="scene-pill ${safe(scene?.status||'waiting')}">${String(i+1).padStart(2,'0')}</span>`;}).join('')}</div>${job.brand_scenes?.length?`<details><summary>Kịch bản từng cảnh</summary>${job.brand_scenes.sort((a,b)=>a.scene_index-b.scene_index).map(scene=>`<p><strong>Cảnh ${scene.scene_index} · ${scene.planned_seconds||job.scene_seconds} giây</strong><br>Lời thoại: ${safe(scene.dialogue||'Không có')}<br>Hành động: ${safe(scene.action||'')}<br>Mô tả: ${safe(scene.prompt)}</p>`).join('')}</details>`:''}</div><div class="job-action">${job.status==='done'&&job.final_path?`<button class="outline view-video" data-path="${safe(job.final_path)}" data-id="${safe(job.id)}">Xem MP4</button>`:job.status==='uploading'?`<label class="outline">Chọn lại ảnh<input class="resume-file" type="file" accept="image/png,image/jpeg,image/webp" data-id="${safe(job.id)}"></label>`:job.status==='error'&&job.retryable&&job.attempt<job.max_attempts?`<button class="outline retry-job" data-id="${safe(job.id)}">Thử lại</button>`:''}</div><div class="video-slot" id="video-${safe(job.id)}"></div></article>`).join('');
+  for(const job of result.data.filter(job=>job.status==='error'&&['CONTENT_INSUFFICIENT','STORYBOARD_INVALID'].includes(job.error_code))){
+    const slot=document.getElementById('video-'+job.id)?.previousElementSibling;
+    if(!slot)continue;
+    const edit=document.createElement('button');edit.type='button';edit.className='outline edit-input';edit.textContent='Chỉnh nội dung';
+    slot.append(edit);
+    edit.addEventListener('click',async()=>{
+      if(session?.user.id!==userId)return;
+      edit.disabled=true;
+      const actor=createClient(supabaseUrl,supabaseKey,{global:{headers:{Authorization:'Bearer '+session.access_token}},auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
+      try{
+        const image=await actor.storage.from('brand-references').download(job.reference_path);if(image.error)throw image.error;
+        if(await fileHash(image.data)!==job.reference_sha256)throw Error('Ảnh đã lưu không khớp ảnh ban đầu.');
+        if(session?.user.id!==userId||!edit.isConnected)return;
+        const content=document.querySelector('#content'),reference=document.querySelector('#reference');if(!content||!reference)return;
+        content.value=job.content;
+        for(const [selector,value] of [['#scene-count',job.scene_count],['#scene-duration',job.scene_seconds]]){
+          const select=document.querySelector(selector);if([...select.options].some(option=>option.value===String(value)))select.value=String(value);
+        }
+        const files=new DataTransfer();files.items.add(new File([image.data],'anh-tham-chieu',{type:image.data.type}));reference.files=files.files;
+        reference.dispatchEvent(new Event('change'));content.dispatchEvent(new Event('input'));
+        document.querySelector('#brand').scrollIntoView({behavior:'smooth'});
+        message('Đã điền lại ảnh và nội dung. Bạn có thể sửa ý tưởng hoặc số cảnh, rồi bấm tạo để gửi yêu cầu mới.','info');
+      }catch(error){if(session?.user.id===userId)message('Không tải lại được ảnh: '+error.message,'error');}
+      finally{if(edit.isConnected)edit.disabled=false;}
+    });
+  }
   list.querySelectorAll('.resume-file').forEach(input=>input.addEventListener('change',async()=>{
     const file=input.files[0],job=result.data.find(item=>item.id===input.dataset.id);if(!file||!job)return;
     input.disabled=true;

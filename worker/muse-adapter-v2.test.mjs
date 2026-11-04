@@ -105,3 +105,16 @@ test('storyboard reads only the assistant reply and never parses a repeated user
   await page.locator('body').evaluate((body,text)=>{const message=document.createElement('div');message.className='hatch-chat-groupable-bubble';message.textContent=text;body.append(message);},reply);
   assert.equal(await adapter.storyboardResponse(marker),reply);
 });
+
+test('a request for more source data stops planning once and never submits a video or a repeated repair',async()=>{
+  const {adapter,page}=fixture();
+  const job={id:'12345678-1234-1234-1234-123456789abc',attempt:1,scene_count:3,scene_seconds:10,content:'Giới thiệu thương hiệu'};
+  let sent=0,attached=0,draft='';
+  adapter.cleanComposer=async()=>({fill:async text=>{draft=text;},inputValue:async()=>draft,press:async key=>{assert.equal(key,'Enter');sent++;}});
+  adapter.attachReference=async()=>{attached++;};adapter.assertConnected=async()=>{};
+  page.isClosed=()=>false;
+  adapter.storyboardResponse=async marker=>JSON.stringify({id:marker,schema_version:2,status:'needs_input',scenes:[]});
+  adapter.generateSceneV2=()=>assert.fail('An incomplete plan must not generate a video');
+  await assert.rejects(adapter.storyboard(job,'reference.png'),{code:'CONTENT_INSUFFICIENT',retryable:false});
+  assert.equal(sent,1);assert.equal(attached,1);
+});

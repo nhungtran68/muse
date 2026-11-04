@@ -45,3 +45,30 @@ test('accepts an outline array or derives it only from validated scene dialogue'
   missing.scenes[0].dialogue='Nho.';
   assert.throws(()=>validateStoryboard(missing,job),{code:'SPEECH_TOO_SHORT'});
 });
+
+test('turns a short brand idea into distinct grounded scenes without consuming the source quote',()=>{
+  const brief={...job,content:'Giơi thiệu về đại ngân farm',scene_count:3};
+  const plan=fixture();
+  const lines=[
+    'Xin chào mọi người, hôm nay mình rất vui được có mặt trong video này để gửi lời chào và giới thiệu về Đại Ngân Farm.',
+    'Trong khung hình này, chiếc nón lá và màu áo xanh cùng nụ cười nhẹ nhàng tạo nên phần hình ảnh cho lời giới thiệu hôm nay.',
+    'Cảm ơn bạn đã dành thời gian theo dõi video giới thiệu này. Hẹn gặp lại bạn trong những nội dung tiếp theo về Đại Ngân Farm.'
+  ];
+  plan.status='ready';
+  plan.scenes=lines.map((dialogue,i)=>({...plan.scenes[0],index:i+1,dialogue,source_quotes:[brief.content]}));
+  const result=validateStoryboard(plan,brief);
+  assert.equal(result.scenes.length,3);
+  assert.equal(new Set(result.scenes.map(s=>s.dialogue)).size,3);
+  assert.ok(result.scenes.every(s=>s.speech.estimated_seconds>=5&&s.speech.estimated_seconds<9.65));
+  plan.scenes[1].dialogue+=' Cam kết bảo hành.';
+  assert.throws(()=>validateStoryboard(plan,brief),{code:'INVENTED_CLAIM'});
+});
+
+test('rejects the reported placeholder scene before word counts or video generation',()=>{
+  const plan=fixture();
+  plan.scenes[1].dialogue='[Chưa có lời thoại trong nội dung gốc - cần bổ sung nội dung, không bịa, không lặp cảnh 1]';
+  plan.scenes[1].action='Giữ nguyên tư thế ảnh, chờ bổ sung lời thoại nên chưa quay cảnh này';
+  plan.scenes[1].source_quotes=[];
+  assert.throws(()=>validateStoryboard(plan,job),{code:'CONTENT_INSUFFICIENT',retryable:false});
+  assert.throws(()=>validateStoryboard({id:plan.id,schema_version:2,status:'needs_input',scenes:[]},job),{code:'CONTENT_INSUFFICIENT',retryable:false});
+});

@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {createClient} from '@supabase/supabase-js';
 import {adminLoginV2} from './login-v2.mjs';
 import {publishableKey,supabaseUrl} from './config.js';
@@ -11,6 +11,7 @@ import {checkMediaToolsAvailable} from './ffmpeg.mjs';
 import {failBrandJobV2,processBrandJobV2} from './workflow-v2.mjs';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const workerVersion=JSON.parse(await readFile(new URL('./package.json',import.meta.url),'utf8')).version;
 const dataDir=path.join(path.dirname(fileURLToPath(import.meta.url)),'data'),downloadsDir=path.join(dataDir,'downloads');
 // Keep the admin session in memory for this process; do not reuse v1's token file.
 const supabase=createClient(supabaseUrl,publishableKey,{auth:{persistSession:false,autoRefreshToken:true,detectSessionInUrl:false}});
@@ -19,7 +20,7 @@ const auditor=new SpeechAuditor({backend:process.env.MUSE_ASR_BACKEND||'native',
 const workerId=randomUUID();let token=null,timer=null,lost=false,renewing=false;
 async function startupStatus(state,error){
   await mkdir(dataDir,{recursive:true});
-  await writeFile(path.join(dataDir,'startup-status.json'),JSON.stringify({state,worker_id:workerId,time:new Date().toISOString(),...(error?{code:error.code||'STARTUP_ERROR',message:String(error.message||'').split('\n')[0].replace(/[A-Za-z0-9_-]{40,}/g,'[redacted]').slice(0,300)}:{})}));
+  await writeFile(path.join(dataDir,'startup-status.json'),JSON.stringify({state,version:workerVersion,worker_id:workerId,time:new Date().toISOString(),...(error?{code:error.code||'STARTUP_ERROR',message:String(error.message||'').split('\n')[0].replace(/[A-Za-z0-9_-]{40,}/g,'[redacted]').slice(0,300)}:{})}));
 }
 async function call(name,args){const result=await supabase.rpc(name,args);if(result.error)throw result.error;return result.data;}
 async function renew(){
@@ -39,7 +40,7 @@ try{
     await renew();if(lost)throw Error('Không thể giữ quyền worker.');
     timer=setInterval(()=>void renew(),20000);
     await startupStatus('ready');
-    console.log('Worker v2 đã sẵn sàng. Giữ cửa sổ này và Muse mở.');
+    console.log(`Worker v2 đã sẵn sàng (bản ${workerVersion}). Giữ cửa sổ này và Muse mở.`);
     while(!lost){
       const job=await call('claim_brand_job_v2',{p_worker:workerId,p_token:token});
       if(!job?.id){await sleep(5000);continue;}
