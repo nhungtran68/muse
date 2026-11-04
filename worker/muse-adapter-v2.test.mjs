@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {MuseAdapterV2} from './muse-adapter-v2.mjs';
+import {MuseAdapterV2,museVideoRejection,summarizeMuseReply} from './muse-adapter-v2.mjs';
 import {chromium} from 'playwright';
 import {installedBrowserExecutable} from './muse-adapter.mjs';
 
@@ -15,6 +15,19 @@ function fixture(){
   const adapter=new MuseAdapterV2('','');adapter.requirePage=()=>page;adapter.closePreview=async()=>{};adapter.composer=()=>({waitFor:async()=>{}});
   return {adapter,page};
 }
+
+test('recognizes explicit Vietnamese refusals without requiring the words báo lỗi',()=>{
+  for(const reply of [
+    'Mình không thể tạo video theo yêu cầu này.',
+    'Thời lượng 8 giây không được hỗ trợ trong lần tạo này.',
+    'Mình chưa thể xuất file MP4.',
+    'Tôi không tạo được video.',
+    'Báo lỗi cho đoạn 1/3 GEN_0, mình không giao clip này: bản tạo ra đúng 10,0 giây và có track AAC, nhưng khung hình là 960x960 vuông, không phải dọc 9:16 như yêu cầu. Theo đúng chỉ dẫn của bạn, mình đã không tự cắt hay kéo giãn về 720x1280. Bạn có muốn mình thử lại một lần với mã mới không?',
+    'I am unable to generate a video for this request.'
+  ])assert.equal(museVideoRejection(reply),true,reply);
+  for(const reply of ['Video đang được tạo, vui lòng chờ.','Nếu không hỗ trợ thời lượng, hãy báo lỗi.','If not supported, report an error.'])assert.equal(museVideoRejection(reply),false,reply);
+  assert.equal(summarizeMuseReply('Trả tại https://example.com/private?token=secret\n'+ 'A'.repeat(50)), 'Trả tại [liên kết] [mã]');
+});
 test('opens a new side chat even when the Chats label contains the previous title',async()=>{
   const {adapter,page}=fixture();assert.deepEqual(await adapter.beginJob({id:'fixture'}),{state:'creating'});
   assert.equal(new URL(page.url()).pathname,'/thread/new');
@@ -72,6 +85,26 @@ test('a timed-out retry keeps its receipt and picks up the matching result witho
   assert.equal(clicks, 1);
 });
 
+test('reports the scoped assistant refusal and never resends a recorded scene',async()=>{
+  const {adapter}=fixture(),job={id:'12345678-1234-1234-1234-123456789abc',scene_seconds:10};
+  const receipt={key:'BRAND_12345678_1234_1234_1234_123456789abc_SCENE_1_GEN_0'};
+  adapter.sceneResponse=async()=>({requested:true,video:null,rejected:true,responseText:'Mình không thể tạo video theo yêu cầu này.'});
+  adapter.cleanComposer=()=>assert.fail('Must not resend a recorded request');
+  adapter.assertConnected=async()=>{};adapter.sceneTimeoutMs=1000;
+  await assert.rejects(adapter.generateSceneV2(job,{index:1},null,{receipt}),error=>error.code==='MUSE_OUTPUT_REJECTED'&&error.retryable===false&&error.message.includes('Mình không thể tạo video'));
+});
+
+test('accepts an already received video even when the wait budget has expired',async()=>{
+  const {adapter}=fixture(),job={id:'12345678-1234-1234-1234-123456789abc',scene_seconds:10};
+  const receipt={key:'BRAND_12345678_1234_1234_1234_123456789abc_SCENE_1_GEN_0'};
+  let disposed=false;
+  adapter.sceneResponse=async()=>({requested:true,video:{click:async()=>{},dispose:async()=>{disposed=true;}}});
+  adapter.cleanComposer=()=>assert.fail('Must not resend');adapter.assertConnected=async()=>{};
+  adapter.downloadScene=async()=>({path:'ready.mp4'});adapter.sceneTimeoutMs=0;
+  assert.deepEqual(await adapter.generateSceneV2(job,{index:1},null,{receipt}),{path:'ready.mp4'});
+  assert.equal(disposed,true);
+});
+
 test('matches only the reply to the user request, even if Muse repeats the key or later requests have videos', async t => {
   const browser = await chromium.launch({headless:true,...(installedBrowserExecutable()?{executablePath:installedBrowserExecutable()}:{})});
   t.after(() => browser.close());
@@ -89,6 +122,9 @@ test('matches only the reply to the user request, even if Muse repeats the key o
   await page.setContent(user('ONE') + assistant('Báo lỗi, mình không giao video này vì thời lượng sai.'));
   result = await adapter.sceneResponse('ONE');
   assert.equal(result.rejected, true);
+  await page.setContent(user('ONE') + assistant('Thời lượng này không được hỗ trợ.') + user('TWO') + card('two'));
+  result=await adapter.sceneResponse('ONE');
+  assert.equal(result.rejected,true);assert.equal(result.responseText,'Thời lượng này không được hỗ trợ.');
   await page.setContent(assistant('ONE. Create a video') + '<textarea>ONE. Create a video</textarea>');
   assert.equal((await adapter.sceneResponse('ONE')).requested, false);
 });

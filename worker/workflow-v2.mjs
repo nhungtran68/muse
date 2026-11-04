@@ -30,6 +30,7 @@ export async function processBrandScriptV3(job,{client,muse,workRoot,workerId,le
 
 export async function processBrandJobV2(job,{client,muse,auditor,workRoot,workerId,leaseToken}){
   if(![2,3].includes(job.schema_version)||(job.schema_version===3&&(job.workflow_phase!=='video'||job.status!=='generating'||job.scene_seconds!==10))||!job.claim_token||!workerId||!leaseToken)throw Error('Thiếu quyền xử lý của yêu cầu.');
+  if(job.schema_version===3&&(!Array.isArray(job.plan)||job.plan.length!==job.scene_count||job.plan.some((part,i)=>part.index!==i+1||part.seconds!==10||typeof part.dialogue!=='string'||!part.dialogue.trim())))throw Object.assign(Error('Kịch bản đã duyệt không hợp lệ. Cần khôi phục bản khách đã duyệt trước khi tạo video.'),{code:'INVALID_APPROVED_SCRIPT',retryable:false});
   const auth={p_id:job.id,p_worker:workerId,p_token:leaseToken,p_claim:job.claim_token};
   const updateJob=patch=>rpc(client,'update_brand_job_v2',{...auth,p_patch:patch});
   const updateScene=(index,patch)=>rpc(client,'update_brand_scene_v2',{...auth,p_scene:index,p_patch:patch});
@@ -56,11 +57,26 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
       file=path.join(dir,`scene-${scene.index}.mp4`);await writeFile(file,data);
     }else{
       await updateScene(scene.index,{status:'generating'});
-      const generation=Number(previous?.generation||0);
-      const video=await muse.generateSceneV2(job,{...scene,generation},image,{
-        receipt:previous?.request_receipt,
-        onBeforeSend:receipt=>updateScene(scene.index,{status:'generating',submission_state:'sending',request_receipt:receipt})
-      });
+      let generation=Number(previous?.generation||0);
+      let receipt=previous?.request_receipt||null;
+      let video;
+      while(true){
+        try{
+          video=await muse.generateSceneV2(job,{...scene,generation},image,{
+            receipt,
+            onBeforeSend:nextReceipt=>updateScene(scene.index,{status:'generating',submission_state:'sending',request_receipt:nextReceipt})
+          });
+          break;
+        }catch(error){
+          // Muse has explicitly said it will not deliver this clip. A new generation
+          // is safe; an uncertain send or timeout must retain its original receipt.
+          if(error?.code!=='MUSE_OUTPUT_REJECTED'||generation>=2)throw error;
+          generation++;
+          receipt=null;
+          await updateScene(scene.index,{status:'generating',generation,submission_state:'not_sent',request_receipt:null,
+            error_code:error.code,error:String(error.message||'Muse từ chối video.').slice(0,400)});
+        }
+      }
       file=video.path;
       const meta=await probeVideo(file);validateScene(meta,job.scene_seconds);
       if(Math.abs(meta.duration-job.scene_seconds)>.4)throw Object.assign(Error(`Cảnh ${scene.index} sai thời lượng yêu cầu.`),{code:'SCENE_DURATION_MISMATCH',retryable:false});

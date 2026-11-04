@@ -161,7 +161,7 @@ function renderScriptEditor(job,card,userId){
   const editor=document.createElement('div');editor.className='script-editor';editor.dataset.revision=String(job.script_revision);editor.dataset.dirty='false';
   editor.innerHTML=`<h4>Kịch bản để bạn chỉnh sửa</h4><p class="muted">Muse đã viết lời thoại. Video chỉ bắt đầu sau khi bạn bấm “Tạo video”.</p><label class="script-count">Số đoạn<select class="script-scene-count">${Array.from({length:settings.max_scenes},(_,i)=>`<option value="${i+1}" ${job.scene_count===i+1?'selected':''}>${i+1} đoạn</option>`).join('')}</select></label><p class="script-total">${job.scene_count} đoạn × 10 giây = ${job.scene_count*10} giây</p>${plan.map(scene=>`<label class="script-line">Đoạn ${scene.index} · 10 giây<textarea class="script-dialogue" data-index="${scene.index}" rows="3" maxlength="600">${safe(scene.dialogue)}</textarea><small>Giọng miền Nam tự nhiên, nói vừa 10 giây và có nhịp nghỉ.</small></label>`).join('')}<p class="script-note" role="status">Lời thoại đã lưu. Bạn có thể sửa trước khi tạo video.</p><div class="script-actions"><button class="outline save-script" type="button">Lưu kịch bản</button><button class="outline replan-script" type="button" hidden>Cập nhật kịch bản</button><button class="primary approve-script" type="button">Tạo video</button></div>`;
   card.querySelector('.job-main').append(editor);
-  const actor=createClient(supabaseUrl,supabaseKey,{global:{headers:{Authorization:'Bearer '+session.access_token}},auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
+  const actor=()=>createClient(supabaseUrl,supabaseKey,{global:{headers:{Authorization:'Bearer '+session.access_token}},auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
   const count=editor.querySelector('.script-scene-count'),note=editor.querySelector('.script-note');
   const videoButton=editor.querySelector('.approve-script'),replanButton=editor.querySelector('.replan-script');
   const lines=()=>[...editor.querySelectorAll('.script-dialogue')].map(field=>field.value);
@@ -181,7 +181,7 @@ function renderScriptEditor(job,card,userId){
       if(Number(count.value)!==job.scene_count)throw Error('Số đoạn đã đổi. Hãy cập nhật lại kịch bản.');
       snapshot.forEach((line,i)=>validateEditedDialogue(line,i+1));
       editor.dataset.busy='true';
-      const response=await actor.rpc('commit_brand_script_v3',{p_id:job.id,p_revision:Number(editor.dataset.revision),p_scene_count:job.scene_count,p_dialogues:snapshot,p_submit:submit});
+      const response=await actor().rpc('commit_brand_script_v3',{p_id:job.id,p_revision:Number(editor.dataset.revision),p_scene_count:job.scene_count,p_dialogues:snapshot,p_submit:submit});
       if(response.error)throw response.error;
       if(!current())return;
       editor.dataset.revision=String(response.data.script_revision);
@@ -201,17 +201,17 @@ function renderScriptEditor(job,card,userId){
     },900);
   }));
   editor.querySelector('.save-script').addEventListener('click',async()=>{
-    clearTimeout(saveTimer);try{await operation;await commit();}catch(error){explain(error);}
+    clearTimeout(saveTimer);try{await commit();}catch(error){explain(error);}
   });
   videoButton.addEventListener('click',async()=>{
-    clearTimeout(saveTimer);videoButton.disabled=true;editor.dataset.busy='true';
-    try{await operation;const result=await commit(true);if(!current())return;if(result?.status!=='video_queued'&&result?.status!=='generating')throw Error('Chưa đưa được video vào hàng đợi.');editor.dataset.dirty='false';editor.dataset.busy='false';await refreshJobs({force:true});message('Đã lưu đúng lời thoại bạn duyệt và bắt đầu tạo video.','success');}
+    clearTimeout(saveTimer);editor.querySelectorAll('textarea,select,button').forEach(control=>control.disabled=true);editor.dataset.busy='true';
+    try{const result=await commit(true);if(!current())return;if(result?.status!=='video_queued'&&result?.status!=='generating')throw Error('Chưa đưa được video vào hàng đợi.');editor.dataset.dirty='false';editor.dataset.busy='false';await refreshJobs({force:true});message('Đã lưu đúng lời thoại bạn duyệt và bắt đầu tạo video.','success');}
     catch(error){explain(error);if(current())videoButton.disabled=Number(count.value)!==job.scene_count;}
-    finally{if(current())editor.dataset.busy='false';}
+    finally{if(current()){editor.dataset.busy='false';editor.querySelectorAll('textarea,select,button').forEach(control=>control.disabled=false);videoButton.disabled=Number(count.value)!==job.scene_count;}}
   });
   replanButton.addEventListener('click',async()=>{
     clearTimeout(saveTimer);replanButton.disabled=true;editor.dataset.busy='true';
-    try{await operation;if(!current())return;const result=await actor.rpc('replan_brand_script_v3',{p_id:job.id,p_revision:Number(editor.dataset.revision),p_scene_count:Number(count.value)});if(result.error)throw result.error;editor.dataset.dirty='false';editor.dataset.busy='false';await refreshJobs({force:true});message('Đã yêu cầu Muse viết lại kịch bản theo số đoạn mới. Chưa tạo video.','success');}
+    try{await operation.catch(()=>{});if(!current())return;const result=await actor().rpc('replan_brand_script_v3',{p_id:job.id,p_revision:Number(editor.dataset.revision),p_scene_count:Number(count.value)});if(result.error)throw result.error;editor.dataset.dirty='false';editor.dataset.busy='false';await refreshJobs({force:true});message('Đã yêu cầu Muse viết lại kịch bản theo số đoạn mới. Chưa tạo video.','success');}
     catch(error){explain(error);if(current())replanButton.disabled=false;}
     finally{if(current())editor.dataset.busy='false';}
   });
@@ -229,8 +229,18 @@ async function refreshJobs({force=false}={}) {
   if(signature===jobsSignature)return;
   jobsSignature=signature;
   if(!result.data.length){list.innerHTML='<div class="empty"><strong>Chưa có video nào</strong></div>';return;}
+  // Other jobs can advance while a member watches or downloads a finished MP4.
+  // Keep that player and its event listeners across the list refresh.
+  const openMedia=new Map([...list.querySelectorAll('.video-slot')].filter(slot=>slot.querySelector('video')).map(slot=>[slot.id,slot]));
   const status={uploading:'Đang chờ ảnh',queued:'Đang chờ',script_queued:'Chờ tạo kịch bản',planning:'Đang viết kịch bản',script_ready:'Chờ bạn duyệt',video_queued:'Chờ tạo video',generating:'Đang tạo video',joining:'Đang ghép video',done:'Hoàn tất',error:'Lỗi',needs_review:'Lỗi',reviewed:'Lỗi'};
   list.innerHTML=result.data.map(job=>`<article class="job-card"><div class="job-main"><div class="job-top"><span>${shortDate(job.created_at)}</span><span class="status status-${safe(job.status)}">${safe(status[job.status]||job.status)}</span></div><h3>${safe(job.content.slice(0,110))}</h3><p>${job.scene_count} ${job.schema_version===3?'đoạn':'cảnh'} · ${job.scene_seconds} giây/${job.schema_version===3?'đoạn':'cảnh'} · tổng ${job.scene_count*job.scene_seconds} giây</p><small>Mã yêu cầu: ${safe(job.id)}</small>${job.error?`<p class="job-error">${safe(job.error)}</p>`:''}<div class="scene-track">${Array.from({length:job.scene_count},(_,i)=>{const scene=job.brand_scenes?.find(x=>x.scene_index===i+1);return `<span class="scene-pill ${safe(scene?.status||'waiting')}">${String(i+1).padStart(2,'0')}</span>`;}).join('')}</div>${job.brand_scenes?.length?`<details><summary>Lời thoại từng đoạn</summary>${job.brand_scenes.sort((a,b)=>a.scene_index-b.scene_index).map(scene=>`<p><strong>Đoạn ${scene.scene_index} · ${scene.planned_seconds||job.scene_seconds} giây</strong><br>Lời thoại: ${safe(scene.dialogue||'Không có')}</p>`).join('')}</details>`:''}</div><div class="job-action">${job.status==='done'&&job.final_path?`<button class="outline view-video" data-path="${safe(job.final_path)}" data-id="${safe(job.id)}">Xem MP4</button>`:job.status==='uploading'?`<label class="outline">Chọn lại ảnh<input class="resume-file" type="file" accept="image/png,image/jpeg,image/webp" data-id="${safe(job.id)}"></label>`:job.status==='error'&&job.retryable&&job.attempt<job.max_attempts?`<button class="outline retry-job" data-id="${safe(job.id)}">Thử lại</button>`:''}</div><div class="video-slot" id="video-${safe(job.id)}"></div></article>`).join('');
+  for(const [id,slot] of openMedia){
+    const fresh=document.getElementById(id);
+    if(!fresh)continue;
+    const view=fresh.closest('.job-card')?.querySelector('.view-video');
+    fresh.replaceWith(slot);
+    if(view)view.hidden=true;
+  }
   result.data.forEach((job,i)=>{if(job.schema_version===3&&job.status==='script_ready')renderScriptEditor(job,list.children[i],userId);});
   for(const job of result.data.filter(job=>job.status==='error'&&['CONTENT_INSUFFICIENT','CONTENT_TOO_LONG','STORYBOARD_INVALID'].includes(job.error_code))){
     const slot=document.getElementById('video-'+job.id)?.previousElementSibling;
@@ -282,7 +292,7 @@ async function refreshJobs({force=false}={}) {
       const actor=createClient(supabaseUrl,supabaseKey,{global:{headers:{Authorization:'Bearer '+session.access_token}},auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
       try{
         const file=await actor.storage.from('brand-videos').download(button.dataset.path);if(file.error)throw file.error;
-        if(session?.user.id!==userId||!downloadButton.isConnected)return;
+        if(session?.user.id!==userId)return;
         const url=URL.createObjectURL(file.data),link=document.createElement('a');
         link.href=url;link.download=`muse-${button.dataset.id}.mp4`;document.body.append(link);link.click();link.remove();
         setTimeout(()=>URL.revokeObjectURL(url),60000);

@@ -42,6 +42,15 @@ test('script phase ends with a saved review draft and never requests a video',as
   assert.equal(client.patches.some(p=>p.name==='update_brand_scene_v2'),false);
   assert.equal([...client.objects.keys()].some(key=>key.startsWith('brand-videos/')),false);
 });
+test('malformed approved script never reads the reference or calls Muse',async()=>{
+  const job={id:randomUUID(),user_id:randomUUID(),claim_token:randomUUID(),schema_version:3,
+    workflow_phase:'video',status:'generating',reference_path:'owner/reference',reference_sha256:'0'.repeat(64),
+    scene_count:2,scene_seconds:10,plan:[{index:1,seconds:10,dialogue:'Đoạn đầu'}]};
+  const client={storage:{from(){assert.fail('Must reject before reading image');}},rpc(){assert.fail('Must reject before database mutation');}};
+  const muse={beginJob(){assert.fail('Must reject before opening Muse');},generateSceneV2(){assert.fail('Must reject before video generation');}};
+  await assert.rejects(processBrandJobV2(job,{client,muse,workRoot:'unused',workerId:randomUUID(),leaseToken:randomUUID()}),
+    error=>error.code==='INVALID_APPROVED_SCRIPT'&&error.retryable===false);
+});
 test('approved three-segment script creates clips in order without asking Muse to rewrite dialogue',async t=>{
   const root=await mkdtemp(path.join(tmpdir(),'muse-v3-video-'));t.after(()=>rm(root,{recursive:true,force:true}));
   const videos=[1,2,3].map(i=>path.join(root,`segment-${i}.mp4`));
@@ -99,4 +108,73 @@ test('a verified bad scene can be retried using a new generation without resendi
   assert.ok(patches.some(p=>p.submission_state==='sending'&&p.request_receipt?.key==='fixture'));
   assert.ok(patches.some(p=>p.status==='error'&&p.generation===1&&p.submission_state==='not_sent'&&p.request_receipt===null));
   assert.equal(client.objects.size,1);
+});
+
+test('explicit Muse refusal retries a fresh generation with unchanged approved dialogue and original image',async t=>{
+  const root=await mkdtemp(path.join(tmpdir(),'muse-v3-rejected-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const video=path.join(root,'accepted.mp4');await clip(video,'green',10);
+  const image=Buffer.alloc(128,3);image.set([137,80,78,71,13,10,26,10]);
+  const dialogue='Đây là lời thoại của khách, không được sửa sau khi duyệt.';
+  const plan=[{index:1,seconds:10,dialogue}];
+  const job={id:randomUUID(),user_id:randomUUID(),claim_token:randomUUID(),schema_version:3,
+    workflow_phase:'video',status:'generating',reference_path:'owner/reference',reference_sha256:hash(image),
+    scene_count:1,scene_seconds:10,plan,attempt:1,max_attempts:3};
+  const scenes=new Map([[job.id,[{scene_index:1,status:'waiting',generation:0,request_receipt:null}]]]);
+  const client=fakeClient([job],[image],scenes),generations=[];
+  const muse={async beginJob(){return {url:'https://muse.ai/thread/approved'};},
+    async storyboard(){assert.fail('Approved script must not be rewritten');},
+    async generateSceneV2(_job,scene,imagePath,{receipt,onBeforeSend}){
+      assert.equal(scene.dialogue,dialogue);assert.equal(hash(await readFile(imagePath)),job.reference_sha256);
+      generations.push(scene.generation);assert.equal(receipt,null);
+      await onBeforeSend({key:`generation-${scene.generation}`});
+      if(scene.generation===0)throw Object.assign(Error('Muse did not deliver a vertical clip'),{code:'MUSE_OUTPUT_REJECTED',retryable:false});
+      return {path:video};
+    }};
+  const result=await processBrandJobV2(job,{client,muse,auditor:{async verify(){return {ok:true};}},workRoot:root,workerId:randomUUID(),leaseToken:randomUUID()});
+  assert.deepEqual(generations,[0,1]);assert.ok(client.objects.has('brand-videos/'+result));
+  const patches=client.patches.filter(p=>p.name==='update_brand_scene_v2').map(p=>p.args.p_patch);
+  assert.ok(patches.some(p=>p.generation===1&&p.request_receipt===null&&p.submission_state==='not_sent'));
+  assert.equal(patches.at(-1).status,'done');
+});
+
+test('uncertain Muse timeout keeps its receipt and never submits a new generation',async t=>{
+  const root=await mkdtemp(path.join(tmpdir(),'muse-v3-timeout-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const image=Buffer.alloc(128,4);image.set([137,80,78,71,13,10,26,10]);
+  const job={id:randomUUID(),user_id:randomUUID(),claim_token:randomUUID(),schema_version:3,
+    workflow_phase:'video',status:'generating',reference_path:'owner/reference',reference_sha256:hash(image),
+    scene_count:1,scene_seconds:10,plan:[{index:1,seconds:10,dialogue:'Lời khách đã duyệt.'}]};
+  const scenes=new Map([[job.id,[{scene_index:1,status:'waiting',generation:0,request_receipt:null}]]]);
+  const client=fakeClient([job],[image],scenes),generations=[];
+  const muse={async beginJob(){return {url:'https://muse.ai/thread/approved'};},
+    async generateSceneV2(_job,scene,_image,{onBeforeSend}){
+      generations.push(scene.generation);await onBeforeSend({key:'uncertain-request'});
+      throw Object.assign(Error('Result not yet visible'),{code:'MUSE_TIMEOUT',retryable:true});
+    }};
+  await assert.rejects(processBrandJobV2(job,{client,muse,workRoot:root,workerId:randomUUID(),leaseToken:randomUUID()}),
+    error=>error.code==='MUSE_TIMEOUT');
+  assert.deepEqual(generations,[0]);
+  const patches=client.patches.filter(p=>p.name==='update_brand_scene_v2').map(p=>p.args.p_patch);
+  assert.ok(patches.some(p=>p.request_receipt?.key==='uncertain-request'));
+  assert.equal(patches.some(p=>p.generation!==undefined||p.request_receipt===null),false);
+});
+
+test('repeated explicit Muse refusals stop after the bounded third generation',async t=>{
+  const root=await mkdtemp(path.join(tmpdir(),'muse-v3-refusal-limit-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const image=Buffer.alloc(128,5);image.set([137,80,78,71,13,10,26,10]);
+  const job={id:randomUUID(),user_id:randomUUID(),claim_token:randomUUID(),schema_version:3,
+    workflow_phase:'video',status:'generating',reference_path:'owner/reference',reference_sha256:hash(image),
+    scene_count:1,scene_seconds:10,plan:[{index:1,seconds:10,dialogue:'Lời khách đã duyệt.'}]};
+  const scenes=new Map([[job.id,[{scene_index:1,status:'waiting',generation:0,request_receipt:null}]]]);
+  const client=fakeClient([job],[image],scenes),generations=[];
+  const muse={async beginJob(){return {url:'https://muse.ai/thread/approved'};},
+    async generateSceneV2(_job,scene,_image,{onBeforeSend}){
+      generations.push(scene.generation);await onBeforeSend({key:`rejected-${scene.generation}`});
+      throw Object.assign(Error('Muse cannot deliver vertical format'),{code:'MUSE_OUTPUT_REJECTED',retryable:false});
+    }};
+  await assert.rejects(processBrandJobV2(job,{client,muse,workRoot:root,workerId:randomUUID(),leaseToken:randomUUID()}),
+    error=>error.code==='MUSE_OUTPUT_REJECTED'&&error.retryable===false);
+  assert.deepEqual(generations,[0,1,2]);
+  const patches=client.patches.filter(p=>p.name==='update_brand_scene_v2').map(p=>p.args.p_patch);
+  assert.deepEqual(patches.filter(p=>p.generation!==undefined).map(p=>p.generation),[1,2]);
+  assert.equal([...client.objects.keys()].some(key=>key.startsWith('brand-videos/')),false);
 });

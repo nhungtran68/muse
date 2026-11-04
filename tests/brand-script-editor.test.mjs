@@ -11,6 +11,7 @@ const owner='20000000-0000-4000-8000-000000000002';
 const id='aaaaaaaa-0000-4000-8000-000000000010';
 const encode=value=>Buffer.from(JSON.stringify(value)).toString('base64url');
 const token=`${encode({alg:'none',typ:'JWT'})}.${encode({sub:owner,exp:Math.floor(Date.now()/1000)+3600,aud:'authenticated',role:'authenticated'})}.test`;
+const refreshedToken=`${encode({alg:'none',typ:'JWT'})}.${encode({sub:owner,exp:Math.floor(Date.now()/1000)+7200,aud:'authenticated',role:'authenticated',jti:'refreshed'})}.test`;
 const json=(body,status=200)=>({status,contentType:'application/json',headers:{'access-control-allow-origin':'*','access-control-allow-headers':'*','access-control-allow-methods':'*'},body:JSON.stringify(body)});
 const lines=[
  'Xin chào mọi người, hôm nay mình kể về Đại Ngân Farm qua hình ảnh quen thuộc này, mình rất vui khi bạn ở đây cùng mình.',
@@ -24,7 +25,8 @@ test('browser separates script creation, editing, count change and explicit vide
  await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Local test site did not start')),30000);vite.stdout.on('data',s=>{if(s.toString().includes('Local:')){clearTimeout(timer);resolve();}});vite.on('exit',code=>reject(Error('Local test site stopped: '+code)));});
  const browser=await chromium.launch({headless:true,...(installedBrowserExecutable()?{executablePath:installedBrowserExecutable()}:{})});t.after(()=>browser.close());
  const context=await browser.newContext(),page=await context.newPage();
- const calls=[];let job=null;
+ const calls=[];let job=null,failedSaves=0,acceptedToken=token,delayVideoDownload=0,delayedDownloads=0;
+ let releaseApproval;const approvalGate=new Promise(resolve=>releaseApproval=resolve);
  await context.route('**/*',async route=>{
   const request=route.request(),url=new URL(request.url());
   if(url.origin===`http://127.0.0.1:${port}`)return route.continue();
@@ -45,12 +47,18 @@ test('browser separates script creation, editing, count change and explicit vide
   }
   if(url.pathname.startsWith('/storage/v1/object/brand-references/'))return route.fulfill(json({Key:'reference'}));
   if(url.pathname.startsWith('/storage/v1/object/sign/brand-videos/'))return route.fulfill(json({signedURL:'/object/sign/brand-videos/final.mp4?token=local-test'}));
-  if(url.pathname.startsWith('/storage/v1/object/brand-videos/')||url.pathname==='/storage/v1/object/sign/brand-videos/final.mp4')return route.fulfill({status:200,contentType:'video/mp4',headers:{'access-control-allow-origin':'*'},body:Buffer.from([0,0,0,24,102,116,121,112,109,112,52,50])});
+  if(url.pathname.includes('/brand-videos/')&&(url.pathname.startsWith('/storage/v1/object/')||url.pathname==='/storage/v1/object/sign/brand-videos/final.mp4')){
+   if(!url.pathname.includes('/sign/')&&delayVideoDownload){delayedDownloads++;await new Promise(resolve=>setTimeout(resolve,delayVideoDownload));}
+   return route.fulfill({status:200,contentType:'video/mp4',headers:{'access-control-allow-origin':'*'},body:Buffer.from([0,0,0,24,102,116,121,112,109,112,52,50])});
+  }
   if(url.pathname==='/rest/v1/rpc/queue_brand_job'){
    calls.push({name:'queue'});job.status='script_queued';return route.fulfill(json(job));
   }
   if(url.pathname==='/rest/v1/rpc/commit_brand_script_v3'){
    const args=request.postDataJSON();calls.push({name:args.p_submit?'video':'save',args});
+   assert.equal(request.headers().authorization,`Bearer ${acceptedToken}`,'Editor must use the latest refreshed session token');
+   if(!args.p_submit&&failedSaves>0){failedSaves--;return route.fulfill(json({message:'Simulated temporary save failure'},503));}
+   if(args.p_submit)await approvalGate;
    assert.equal(args.p_scene_count,job.scene_count);
    assert.equal(args.p_revision,job.script_revision);
    const changed=job.plan.some((part,i)=>part.dialogue!==args.p_dialogues[i]);
@@ -83,7 +91,10 @@ test('browser separates script creation, editing, count change and explicit vide
  assert.equal(await page.locator('.script-editor .script-dialogue').count(),2);
  assert.match(await page.locator('.script-total').innerText(),/20 giây/);
  const edited='Xin chào mọi người, lời thoại đầu này do chính khách hàng sửa lại, mình muốn nói chậm và tự nhiên trong video nha.';
+ failedSaves=1;
  await page.locator('.script-dialogue').first().fill(edited);
+ await page.locator('.script-note').filter({hasText:'Simulated temporary save failure'}).waitFor();
+ assert.notEqual(job.plan[0].dialogue,edited);
  await page.locator('.save-script').click();
   await page.waitForFunction(()=>document.querySelector('.script-editor')?.dataset.revision==='2');
  assert.equal(job.plan[0].dialogue,edited);
@@ -97,9 +108,24 @@ test('browser separates script creation, editing, count change and explicit vide
  job={...job,status:'script_ready',plan:plan(3),script_revision:job.script_revision+1};
  await page.reload();await page.locator('.script-editor .script-dialogue').first().waitFor();
  assert.equal(await page.locator('.script-dialogue').count(),3);
+ acceptedToken=refreshedToken;
+ await page.evaluate(async refreshed=>{
+  const key=Object.keys(localStorage).find(name=>name.endsWith('-auth-token'));
+  if(!key)throw Error('Missing fixture session');
+  const refreshedSession={...JSON.parse(localStorage.getItem(key)),access_token:refreshed};
+  localStorage.setItem(key,JSON.stringify(refreshedSession));
+  const channel=new BroadcastChannel(key);
+  channel.postMessage({event:'TOKEN_REFRESHED',session:refreshedSession});
+  await new Promise(resolve=>setTimeout(resolve,100));channel.close();
+ },refreshedToken);
  const lastEdit='Cuối cùng, đây là lời kết do khách hàng tự chỉnh sửa, mình cảm ơn mọi người đã nghe câu chuyện trọn vẹn hôm nay nha.';
+ failedSaves=1;
  await page.locator('.script-dialogue').last().fill(lastEdit);
+ await page.locator('.script-note').filter({hasText:'Simulated temporary save failure'}).waitFor();
  await page.locator('.approve-script').click();
+ assert.equal(await page.locator('.script-dialogue').last().isDisabled(),true);
+ assert.equal(await page.locator('.script-scene-count').isDisabled(),true);
+ releaseApproval();
  await page.locator('#jobs-list').getByText('Chờ tạo video').waitFor();
  const approved=calls.find(call=>call.name==='video');
  assert.equal(approved.args.p_dialogues.length,3);
@@ -109,6 +135,12 @@ test('browser separates script creation, editing, count change and explicit vide
   job={...job,status:'done',final_path:`${owner}/${id}/claim/final.mp4`};
   await page.reload();await page.locator('.view-video').click();
   await page.locator('.video-slot video').waitFor();
+  // A simultaneous job update forces refreshJobs while the MP4 is still being
+  // downloaded. The player and download must survive that refresh.
+  job={...job,updated_at:new Date(Date.now()+1000).toISOString()};
+  delayVideoDownload=9000;
   const download=page.waitForEvent('download');await page.locator('.download-video').click();
   assert.equal((await download).suggestedFilename(),`muse-${id}.mp4`);
+  assert.equal(delayedDownloads,1,'the actual MP4 download crossed a list refresh');
+  assert.equal(await page.locator('.video-slot video').count(),1);
 });

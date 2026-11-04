@@ -56,10 +56,14 @@ export class SpeechAuditor{
  async verify(file,scene,seconds){
   let transcript=await this.transcribe(file),check=checkTranscript(scene.dialogue,transcript.text,transcript.words,seconds),baseline=null;
   const vocabulary=speechVocabulary(scene);
-  // Supply grounded names, never the expected sentence. A normal closing word
-  // must follow the name so the hint cannot manufacture the entire ending.
-  const endsWithName=vocabulary.some(term=>normalizeSpeech(scene.dialogue).endsWith(normalizeSpeech(term)));
-  if(check.reason==='CUT_OFF_SPEECH'&&check.word_error_rate<=.15&&check.spoken_seconds>=seconds*.60&&vocabulary.length&&!endsWithName){
+  // Never supply the expected sentence. For a terminal name, require both
+  // bookends to have been heard already; a missing last word cannot be hinted in.
+  const terminal=vocabulary.find(term=>normalizeSpeech(scene.dialogue).endsWith(normalizeSpeech(term)));
+  const name=normalizeSpeech(terminal||'').split(' ').filter(Boolean);
+  const heard=normalizeSpeech(transcript.text).split(' ').filter(Boolean).slice(-name.length);
+  const anchoredName=name.length>=3&&heard.length===name.length&&heard[0]===name[0]&&heard.at(-1)===name.at(-1)
+    &&heard.filter((word,i)=>word!==name[i]).length===1;
+  if(check.reason==='CUT_OFF_SPEECH'&&check.word_error_rate<=.15&&check.spoken_seconds>=seconds*.60&&vocabulary.length&&(!terminal||anchoredName)){
    const hinted=await this.transcribe(file,{vocabulary}),candidate=checkTranscript(scene.dialogue,hinted.text,hinted.words,seconds);
    if(candidate.ok&&candidate.word_error_rate<check.word_error_rate&&candidate.spoken_end<=check.spoken_end+.12){
     baseline={reason:check.reason,word_error_rate:check.word_error_rate,transcript:transcript.text,spoken_end:check.spoken_end};
