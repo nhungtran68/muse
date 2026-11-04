@@ -28,7 +28,7 @@ export async function processBrandScriptV3(job,{client,muse,workRoot,workerId,le
   return rpc(client,'complete_brand_script_v3',{...auth,p_plan:storyboard.scenes,p_analysis:storyboard.analysis,p_outline:storyboard.outline});
 }
 
-export async function processBrandJobV2(job,{client,muse,auditor,workRoot,workerId,leaseToken}){
+export async function processBrandJobV2(job,{client,muse,auditor,workRoot,workerId,leaseToken,retryDelayMs=3000}){
   if(![2,3].includes(job.schema_version)||(job.schema_version===3&&(job.workflow_phase!=='video'||job.status!=='generating'||job.scene_seconds!==10))||!job.claim_token||!workerId||!leaseToken)throw Error('Thiếu quyền xử lý của yêu cầu.');
   if(job.schema_version===3&&(!Array.isArray(job.plan)||job.plan.length!==job.scene_count||job.plan.some((part,i)=>part.index!==i+1||part.seconds!==10||typeof part.dialogue!=='string'||!part.dialogue.trim())))throw Object.assign(Error('Kịch bản đã duyệt không hợp lệ. Cần khôi phục bản khách đã duyệt trước khi tạo video.'),{code:'INVALID_APPROVED_SCRIPT',retryable:false});
   const auth={p_id:job.id,p_worker:workerId,p_token:leaseToken,p_claim:job.claim_token};
@@ -58,40 +58,70 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
     }else{
       await updateScene(scene.index,{status:'generating'});
       let generation=Number(previous?.generation||0);
+      const generationLimit=Math.floor(generation/3)*3+2;
       let receipt=previous?.request_receipt||null;
-      let video;
+      let timeouts=0;
       while(true){
+        let video;
         try{
+          console.log(`Yêu cầu ${job.id} · đoạn ${scene.index}/${job.scene_count} · lần tạo ${generation%3+1}/3${receipt?' · tiếp tục nhận kết quả':' · gửi Muse'}`);
           video=await muse.generateSceneV2(job,{...scene,generation},image,{
             receipt,
-            onBeforeSend:nextReceipt=>updateScene(scene.index,{status:'generating',submission_state:'sending',request_receipt:nextReceipt})
+            onBeforeSend:async nextReceipt=>{await updateScene(scene.index,{status:'generating',submission_state:'sending',request_receipt:nextReceipt});receipt=nextReceipt;}
           });
-          break;
         }catch(error){
+          if(error?.code==='MUSE_TIMEOUT'&&receipt&&timeouts<2){
+            timeouts++;
+            console.warn(`Yêu cầu ${job.id} · đoạn ${scene.index} · lần chờ ${timeouts}/3 hết hạn; tiếp tục theo biên nhận cũ.`);
+            await new Promise(resolve=>setTimeout(resolve,retryDelayMs*timeouts));
+            continue;
+          }
+          if(error?.code==='MUSE_TIMEOUT'&&receipt){
+            await updateScene(scene.index,{status:'error',error_code:'MUSE_TIMEOUT',error:`Đoạn ${scene.index}: chưa thấy kết quả sau ba lần kiểm tra; giữ biên nhận cũ để tiếp tục nhận, không gửi lại.`});
+            throw error;
+          }
           // Muse has explicitly said it will not deliver this clip. A new generation
           // is safe; an uncertain send or timeout must retain its original receipt.
-          if(error?.code!=='MUSE_OUTPUT_REJECTED'||generation>=2)throw error;
+          if(error?.code!=='MUSE_OUTPUT_REJECTED')throw error;
+          if(generation>=generationLimit){
+            await updateScene(scene.index,{status:'error',error_code:error.code,error:String(error.message||'Muse từ chối video.').slice(0,400)});
+            throw error;
+          }
           generation++;
           receipt=null;
           await updateScene(scene.index,{status:'generating',generation,submission_state:'not_sent',request_receipt:null,
             error_code:error.code,error:String(error.message||'Muse từ chối video.').slice(0,400)});
+          await new Promise(resolve=>setTimeout(resolve,retryDelayMs*(generation%3+1)));
+          continue;
         }
+        file=video.path;
+        const meta=await probeVideo(file);
+        let invalid=null;
+        try{validateScene(meta,job.scene_seconds);if(Math.abs(meta.duration-job.scene_seconds)>.4)throw Error(`Sai thời lượng: ${meta.duration}.`);}
+        catch(error){invalid=error;}
+        const audit=invalid?null:await auditor.verify(file,scene,job.scene_seconds);
+        if(invalid||!audit.ok){
+          const code=invalid?'SCENE_MEDIA_INVALID':audit.reason||'SPEECH_UNVERIFIED';
+          const detail=`Đoạn ${scene.index}: ${invalid?.message||'lời thoại không khớp hoặc chưa được đọc hết ('+code+').'}`;
+          if(generation<generationLimit){
+            generation++;receipt=null;
+            await updateScene(scene.index,{status:'generating',generation,submission_state:'not_sent',request_receipt:null,
+              speech_audit:audit,error_code:code,error:detail});
+            console.warn(`Yêu cầu ${job.id} · đoạn ${scene.index} · clip chưa hợp lệ (${code}); thử lần ${generation%3+1}/3.`);
+            await new Promise(resolve=>setTimeout(resolve,retryDelayMs*(generation%3+1)));
+            continue;
+          }
+          await updateScene(scene.index,{status:'error',speech_audit:audit,error_code:code,error:detail});
+          throw Object.assign(Error(detail+' Cần kiểm tra kết quả Muse trước khi gửi yêu cầu mới.'),{code,retryable:false});
+        }
+        const data=await readFile(file),fingerprint=sha256(data);
+        if(hashes.has(fingerprint))throw Object.assign(Error('Video các cảnh bị trùng.'),{code:'DUPLICATE_SCENE',retryable:false});
+        const key=`${job.user_id}/${job.id}/${job.claim_token}/scenes/${String(scene.index).padStart(2,'0')}.mp4`;
+        await upload(client,key,file);
+        await updateScene(scene.index,{status:'done',submission_state:'downloaded',output_path:key,duration:meta.duration,output_sha256:fingerprint,speech_audit:audit,error:null,error_code:null});
+        console.log(`Yêu cầu ${job.id} · đoạn ${scene.index}/${job.scene_count} · đã lưu MP4 hợp lệ.`);
+        break;
       }
-      file=video.path;
-      const meta=await probeVideo(file);validateScene(meta,job.scene_seconds);
-      if(Math.abs(meta.duration-job.scene_seconds)>.4)throw Object.assign(Error(`Cảnh ${scene.index} sai thời lượng yêu cầu.`),{code:'SCENE_DURATION_MISMATCH',retryable:false});
-      const audit=await auditor.verify(file,scene,job.scene_seconds);
-      if(!audit.ok){
-        const retryable=generation<2&&(job.attempt??0)<(job.max_attempts??3);
-        const detail=`Cảnh ${scene.index}: lời thoại không khớp hoặc chưa được đọc hết (${audit.reason}).`;
-        await updateScene(scene.index,{status:'error',...(retryable?{generation:generation+1,submission_state:'not_sent',request_receipt:null}:{}),speech_audit:audit,error_code:audit.reason||'SPEECH_UNVERIFIED',error:detail});
-        throw Object.assign(Error(retryable?detail+' Có thể thử tạo lại cảnh này.':detail+' Cần quản trị viên kiểm tra.'),{code:audit.reason||'SPEECH_UNVERIFIED',retryable});
-      }
-      const data=await readFile(file),fingerprint=sha256(data);
-      if(hashes.has(fingerprint))throw Object.assign(Error('Video các cảnh bị trùng.'),{code:'DUPLICATE_SCENE',retryable:false});
-      const key=`${job.user_id}/${job.id}/${job.claim_token}/scenes/${String(scene.index).padStart(2,'0')}.mp4`;
-      await upload(client,key,file);
-      await updateScene(scene.index,{status:'done',submission_state:'downloaded',output_path:key,duration:meta.duration,output_sha256:fingerprint,speech_audit:audit});
     }
     const meta=await probeVideo(file);validateScene(meta,job.scene_seconds);
     if(Math.abs(meta.duration-job.scene_seconds)>.4)throw Object.assign(Error(`Cảnh ${scene.index} đã lưu sai thời lượng yêu cầu.`),{code:'SCENE_DURATION_MISMATCH',retryable:false});

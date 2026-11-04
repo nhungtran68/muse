@@ -130,8 +130,14 @@ export class MuseAdapterV2 extends MuseAdapter {
     const page=this.requirePage();
     const key=`BRAND_${job.id.replaceAll('-','_')}_SCENE_${scene.index}_GEN_${scene.generation||0}`;
     if(receipt&&receipt.key!==key)throw Object.assign(Error('Biên nhận cảnh không khớp lần tạo; cần kiểm tra trước khi tiếp tục.'),{code:'UNCERTAIN_SUBMISSION',retryable:false});
-    const videoPrompt=job.schema_version===3?clipRequest(job,scene):null;
-    const promptHash=videoPrompt?createHash('sha256').update(videoPrompt).digest('hex'):null;
+    let videoPrompt=job.schema_version===3?clipRequest(job,scene):null;
+    let promptHash=videoPrompt?createHash('sha256').update(videoPrompt).digest('hex'):null;
+    if(receipt?.prompt_sha256&&receipt.prompt_sha256!==promptHash&&job.schema_version===3){
+      // Resume an already sent request with its original prompt hash. Never
+      // submit it again merely because the worker was upgraded.
+      const previous=clipRequest(job,scene,{legacy:true});
+      if(createHash('sha256').update(previous).digest('hex')===receipt.prompt_sha256){videoPrompt=previous;promptHash=receipt.prompt_sha256;}
+    }
     if(receipt?.prompt_sha256&&receipt.prompt_sha256!==promptHash)throw Object.assign(Error('Mẫu prompt hoặc lời thoại đã thay đổi sau lần gửi trước; cần kiểm tra.'),{code:'UNCERTAIN_SUBMISSION',retryable:false});
     await this.closePreview();
     await this.composer().waitFor({state:'visible',timeout:this.composerTimeoutMs});
