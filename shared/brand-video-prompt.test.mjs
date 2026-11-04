@@ -23,6 +23,8 @@ test('video requests scope a single clip while retaining the unchanged template 
  const job={schema_version:3,scene_count:3,scene_seconds:10,plan,video_prompt_version:BRAND_VIDEO_TEMPLATE_VERSION};
  const request=clipRequest(job,plan[1]);
  assert.match(request,/CHỈ THỰC HIỆN ĐOẠN 2\/3/);
+ assert.match(request,/đọc hết câu vào khoảng giây thứ 8 đến 9/);
+ assert.match(request,/không thay đổi lời thoại/);
  assert.ok(request.endsWith(compileBrandVideoPrompt(3,plan.map(x=>x.dialogue))));
  assert.throws(()=>clipRequest(job,{...plan[1],dialogue:'khác'}),/không khớp/);
  assert.throws(()=>compileBrandVideoPrompt(3,[first,second]),/không khớp/);
