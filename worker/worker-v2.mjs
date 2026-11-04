@@ -17,8 +17,9 @@ const dataDir=path.join(path.dirname(fileURLToPath(import.meta.url)),'data'),dow
 const supabase=createClient(supabaseUrl,publishableKey,{auth:{persistSession:false,autoRefreshToken:true,detectSessionInUrl:false}});
 const muse=new MuseAdapterV2(path.join(dataDir,'muse-profile'),downloadsDir);
 const auditor=new SpeechAuditor({backend:process.env.MUSE_ASR_BACKEND||'native',container:process.env.MUSE_ASR_CONTAINER,modelRoot:process.env.MUSE_ASR_MODEL});
-const workerId=randomUUID();let token=null,timer=null,lost=false,renewing=false;
+const workerId=randomUUID();let token=null,timer=null,lost=false,renewing=false,currentState='starting';
 async function startupStatus(state,error){
+  currentState=state;
   await mkdir(dataDir,{recursive:true});
   await writeFile(path.join(dataDir,'startup-status.json'),JSON.stringify({state,version:workerVersion,worker_id:workerId,time:new Date().toISOString(),...(error?{code:error.code||'STARTUP_ERROR',message:String(error.message||'').split('\n')[0].replace(/[A-Za-z0-9_-]{40,}/g,'[redacted]').slice(0,300)}:{})}));
 }
@@ -26,7 +27,7 @@ async function call(name,args){const result=await supabase.rpc(name,args);if(res
 async function renew(){
   if(renewing||lost)return;renewing=true;
   try{await call('renew_muse_worker',{p_worker:workerId,p_token:token});}
-  catch(error){lost=true;console.error('Mất quyền worker; dừng cửa sổ Muse:',error.message);await muse.close().catch(()=>{});}
+  catch(error){lost=true;await startupStatus('error',error).catch(()=>{});console.error('Mất quyền worker; dừng cửa sổ Muse:',error.message);await muse.close().catch(()=>{});}
   finally{renewing=false;}
 }
 try{
@@ -60,4 +61,5 @@ finally{
   if(timer)clearInterval(timer);
   if(token&&!lost)await call('release_muse_worker',{p_worker:workerId,p_token:token}).catch(()=>{});
   await muse.close().catch(()=>{});supabase.auth.stopAutoRefresh();
+  if(currentState!=='error')await startupStatus('stopped').catch(()=>{});
 }

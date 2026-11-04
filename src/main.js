@@ -81,6 +81,9 @@ function renderModule() {
   flow[0].querySelector('strong').textContent='Tạo kịch bản';flow[0].querySelector('p').textContent='Muse viết đủ số đoạn, mỗi đoạn 10 giây.';
   flow[1].querySelector('strong').textContent='Bạn chỉnh lời thoại';flow[1].querySelector('p').textContent='Sửa từng đoạn và duyệt nội dung cuối cùng.';
   flow[2].querySelector('strong').textContent='Tạo và ghép video';flow[2].querySelector('p').textContent='Mỗi clip dùng cùng ảnh gốc; hệ thống ghép theo thứ tự.';
+  const limit=document.createElement('p');limit.className='inline-warning';
+  limit.textContent='Muse tạo từng clip 10 giây. Ảnh và hướng dẫn giữ nhân vật, giọng nói được dùng lại cho mỗi clip; hiện chưa có khóa khuôn mặt hoặc giọng nói được xác nhận. Hãy xem thành phẩm trước khi sử dụng.';
+  section.querySelector('.flow-foot').after(limit);
   const summarize=document.createElement('label');summarize.className='summarize-choice';
   summarize.innerHTML='<input id="allow-summarize" type="checkbox"> Nếu nội dung dài, tôi đồng ý rút gọn chi tiết phụ nhưng giữ các ý chính.';
   section.querySelector('.consent').before(summarize);
