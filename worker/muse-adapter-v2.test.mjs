@@ -154,3 +154,25 @@ test('a request for more source data stops planning once and never submits a vid
   await assert.rejects(adapter.storyboard(job,'reference.png'),{code:'CONTENT_INSUFFICIENT',retryable:false});
   assert.equal(sent,1);assert.equal(attached,1);
 });
+
+test('a long raw idea that Muse initially refuses is automatically condensed and retried as script-only',async()=>{
+  const {adapter,page}=fixture();
+  const job={id:'12345678-1234-1234-1234-123456789abc',attempt:1,schema_version:3,scene_count:1,scene_seconds:10,
+    allow_summarize:true,content:'Gia đình không cần phải hoàn hảo. Hãy trân trọng thời gian bên cha mẹ, vợ chồng và con cái.'};
+  let sent=0,attached=0,draft='';const prompts=[];
+  adapter.cleanComposer=async()=>({fill:async text=>{draft=text;prompts.push(text);},inputValue:async()=>draft,press:async()=>{sent++;}});
+  adapter.attachReference=async()=>{attached++;};adapter.assertConnected=async()=>{};page.isClosed=()=>false;
+  adapter.storyboardResponse=async marker=>{
+    if(sent===1)return JSON.stringify({id:marker,schema_version:3,status:'needs_shortening',suggested_scene_count:4,scenes:[]});
+    return JSON.stringify({id:marker,schema_version:3,status:'ready',
+      analysis:{topic:'Gia đình',message:'Trân trọng thời gian bên nhau',character:'Người trong ảnh',context:'Bối cảnh ảnh tham chiếu',purpose:'Chia sẻ thông điệp về gia đình'},
+      outline:'Mở lời chia sẻ và kết bằng thông điệp trân trọng những điều bình dị.',
+      scenes:[{index:1,seconds:10,prompt:'Nhân vật chia sẻ trực tiếp trước camera trong cùng bối cảnh ảnh.',
+        dialogue:'Xin chào mọi người, hôm nay mình chia sẻ câu chuyện này thật gần gũi. Mong mọi người cùng lắng nghe và trân trọng những điều bình dị quanh mình nhé.',
+        action:'Nhìn camera, mỉm cười nhẹ và nói tự nhiên.',source_quotes:['Gia đình không cần phải hoàn hảo']}]});
+  };
+  adapter.generateSceneV2=()=>assert.fail('Script planning must never start video generation');
+  const result=await adapter.storyboard(job,'reference.png');
+  assert.equal(result.scenes.length,1);assert.equal(sent,2);assert.equal(attached,1);
+  assert.match(prompts[0],/TỰ ĐỘNG cô đọng/);assert.match(prompts[1],/Lượt trước chưa cô đọng nội dung/);
+});

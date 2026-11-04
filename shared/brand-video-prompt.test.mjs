@@ -45,15 +45,17 @@ test('the previously sent multi-part prompt is retained only for receipt recover
  assert.throws(()=>validateEditedDialogue('Xin chào.',1),/ước tính/);
  assert.throws(()=>compileBrandVideoPrompt(1,[first+' {{X}}']),/biến mẫu/);
 });
-test('the new Muse prompt requests script only, southern Vietnamese speech and explicit overlength consent',()=>{
+test('the new Muse prompt automatically expands brief ideas and condenses long input',()=>{
  const job={schema_version:3,id:'11111111-1111-4111-8111-111111111111',content:'Giới thiệu về Đại Ngân Farm',scene_count:3,scene_seconds:10,allow_summarize:false};
  const marker='PLAN_'+job.id.replaceAll('-','_');
  const prompt=buildStoryboardPrompt(job,marker);
  assert.match(prompt,/CHỈ VIẾT KỊCH BẢN/);
  assert.match(prompt,/miền Nam/);
- assert.match(prompt,/CHƯA đồng ý rút gọn/);
- assert.match(prompt,/status="needs_shortening"/);
+ assert.match(prompt,/phát triển thành lời chia sẻ hoàn chỉnh/);
+ assert.match(prompt,/TỰ ĐỘNG cô đọng/);
+ assert.doesNotMatch(prompt,/CHƯA đồng ý rút gọn/);
  assert.match(prompt,/CÙNG MỘT nhân vật trong CÙNG bối cảnh/);
  assert.doesNotMatch(prompt,/Tạo video gồm \{\{SO_DOAN\}\}/);
- assert.throws(()=>validateStoryboard({id:marker,schema_version:3,status:'needs_shortening',scenes:[]},job),{code:'CONTENT_TOO_LONG',retryable:false});
+ assert.throws(()=>validateStoryboard({id:marker,schema_version:3,status:'needs_shortening',scenes:[]},job),error=>error.code==='CONTENT_TOO_LONG'&&error.retryable!==false);
+ assert.throws(()=>validateStoryboard({id:marker,schema_version:3,status:'needs_input',scenes:[]},job),error=>error.code==='CONTENT_INSUFFICIENT'&&error.retryable!==false);
 });
