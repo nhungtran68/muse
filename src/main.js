@@ -10,7 +10,8 @@ const supabase = supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 const safe = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const shortDate = value => new Intl.DateTimeFormat('vi-VN',{dateStyle:'short',timeStyle:'short'}).format(new Date(value));
 const labels = {uploading:'Đang tải ảnh',queued:'Đang xếp hàng',planning:'AI chia cảnh',generating:'Đang tạo cảnh',joining:'Đang ghép',done:'Hoàn tất',needs_review:'Cần kiểm tra',reviewed:'Đã kiểm tra'};
-let session = null, profile = null, settings = null, modes = [], poller = null, previewUrl = null, jobsSignature = '', appEpoch = 0, jobsRefreshVersion = 0, sceneRetryAvailable = null;
+let session = null, profile = null, settings = null, modes = [], poller = null, previewUrl = null, jobsSignature = '', appEpoch = 0, jobsRefreshVersion = 0, sceneRetryAvailable = null, jobsVisibleCount = 3, jobsTotalCount = 0, retentionClock = null;
+const retentionExpiredRefreshes=new Set();
 
 function message(text, type='info') {
   const box = document.querySelector('#notice');
@@ -22,6 +23,7 @@ function showLoading() { root.innerHTML='<main class="loading"><span class="spin
 
 function authView(mode='login') {
   clearInterval(poller);
+  clearInterval(retentionClock);
   root.innerHTML=`<div class="auth-layout"><div class="auth-art"><div class="brandmark">M<span>•</span></div><p class="eyebrow">MUSE STUDIO</p><h1>Từ ý tưởng<br>đến thước phim.</h1><p>Một không gian để thành viên tạo video theo từng cảnh, theo dõi tiến độ và lấy bản hoàn chỉnh.</p><div class="art-lines"><i></i><i></i><i></i></div></div><main class="auth-panel"><div class="auth-box"><p class="eyebrow">TÀI KHOẢN</p><h2>${mode==='signup'?'Tạo tài khoản':'Chào mừng trở lại'}</h2><p class="muted">${mode==='signup'?'Đăng ký bằng email. Quản trị viên sẽ duyệt trước khi bạn tạo video.':'Đăng nhập để tiếp tục sáng tạo.'}</p><form id="auth-form"><label>Email<input id="auth-email" type="email" autocomplete="email" required></label><label>Mật khẩu<input id="auth-password" type="password" autocomplete="${mode==='signup'?'new-password':'current-password'}" minlength="12" required></label><button class="primary full" type="submit">${mode==='signup'?'Đăng ký':'Đăng nhập'} <span aria-hidden="true">↗</span></button></form><div id="notice" class="notice" hidden role="status"></div><button id="switch-auth" class="text-button">${mode==='signup'?'Đã có tài khoản? Đăng nhập':'Chưa có tài khoản? Đăng ký'}</button></div></main></div>`;
   on('#switch-auth','click',()=>authView(mode==='signup'?'login':'signup'));
   on('#auth-form','submit',async event=>{
@@ -150,8 +152,89 @@ async function submitBrand(event) {
 
 function renderJobs() {
   jobsSignature='';
-  document.querySelector('#jobs').innerHTML='<div class="section-head"><div><p class="eyebrow">THƯ VIỆN CỦA TÔI</p><h2>Video của tôi</h2></div><span class="section-note">Mỗi cảnh được cập nhật theo tiến độ</span></div><div id="jobs-list" class="jobs-list"><div class="empty">Đang tải video…</div></div>';
+  jobsVisibleCount=3;jobsTotalCount=0;
+  clearInterval(retentionClock);
+  document.querySelector('#jobs').innerHTML='<div class="section-head"><div><p class="eyebrow">THƯ VIỆN CỦA TÔI</p><h2>Video của tôi</h2></div><span class="section-note">Mỗi cảnh được cập nhật theo tiến độ</span></div><p class="retention-intro">Video hoàn tất được lưu trong 60 phút. Hãy tải xuống thiết bị trước khi hết hạn.</p><div id="jobs-list" class="jobs-list"><div class="empty">Đang tải video…</div></div><div id="jobs-pagination" class="jobs-pagination" aria-live="polite"></div>';
+  retentionClock=setInterval(updateRetentionCountdowns,1000);
   refreshJobs();
+}
+
+function formatRemaining(milliseconds) {
+  const total=Math.max(0,Math.floor(milliseconds/1000));
+  return `${Math.floor(total/60)} phút ${String(total%60).padStart(2,'0')} giây`;
+}
+
+function updateRetentionCountdowns() {
+  document.querySelectorAll('.retention-timer[data-expiry]').forEach(timer=>{
+    const remaining=Date.parse(timer.dataset.expiry)-Date.now();
+    timer.textContent=remaining>0?formatRemaining(remaining):'đang chờ máy chủ xác nhận xóa';
+    const notice=timer.closest('.retention-state');
+    notice?.classList.toggle('retention-active',remaining>10*60*1000);
+    notice?.classList.toggle('retention-warning',remaining<=10*60*1000&&remaining>5*60*1000);
+    notice?.classList.toggle('retention-urgent',remaining<=5*60*1000);
+    if(remaining<=0){
+      const card=timer.closest('.job-card');
+      card?.querySelectorAll('.view-video,.download-final,.video-slot').forEach(element=>{
+        if(element.matches('.video-slot'))element.replaceChildren();
+        else {element.disabled=true;element.hidden=true;}
+      });
+      const jobId=card?.dataset.jobId;
+      if(jobId&&!retentionExpiredRefreshes.has(jobId)){retentionExpiredRefreshes.add(jobId);refreshJobs();}
+    }
+  });
+}
+
+function retentionMarkup(job) {
+  if(job.status!=='done')return '';
+  if(job.retention_status==='expired')return '<div class="expired-label retention-state" role="status">Đã hết hạn – File đã được xóa</div>';
+  if(job.retention_status==='deleting')return '<div class="expiry-warning retention-state" role="status">Đã hết thời hạn lưu; hệ thống đang xác nhận xóa file.</div>';
+  if(job.retention_status==='delete_failed'&&job.retention_next_attempt_at)return `<div class="expiry-warning retention-state" role="status">Đã quá thời hạn lưu. Hệ thống sẽ thử xóa lại (lần ${Number(job.retention_attempts||0)}/5); chưa xác nhận file đã được xóa.</div>`;
+  if(job.retention_status==='delete_failed')return '<div class="expiry-warning retention-state" role="status">Hệ thống chưa xóa được file sau các lần thử lại. File chưa được xác nhận đã xóa; quản trị viên cần kiểm tra.</div>';
+  if(job.retention_status==='active'&&job.output_expires_at){
+    const remaining=Date.parse(job.output_expires_at)-Date.now();
+    return `<div class="expiry-warning retention-state ${remaining<=5*60*1000?'retention-urgent':remaining<=10*60*1000?'retention-warning':'retention-active'}" role="status"><span>Ảnh/video của bạn đã được tạo thành công. File chỉ được lưu trong 60 phút và sẽ tự động xóa. Vui lòng tải về thiết bị để tránh mất dữ liệu.</span><strong class="retention-badge">Thời gian còn lại: <span class="retention-timer" data-expiry="${safe(job.output_expires_at)}">${remaining>0?formatRemaining(remaining):'đang chờ máy chủ xác nhận xóa'}</span></strong></div>`;
+  }
+  if(job.retention_status&&job.retention_status!=='active')return '<div class="expiry-warning retention-state" role="status">Không xác định được thời hạn lưu file. Tải xuống ngay nếu file còn khả dụng.</div>';
+  return '<div class="retention-badge retention-state" role="status">Kết quả được tạo trước khi áp dụng thời hạn lưu tự động.</div>';
+}
+
+function mediaStillAvailable(retentionStatus,expiresAt) {
+  return !['deleting','expired','delete_failed'].includes(retentionStatus)&&(!expiresAt||Date.parse(expiresAt)>Date.now());
+}
+
+function canDownloadFinal(job) {
+  return job.status==='done'&&Boolean(job.final_path)&&mediaStillAvailable(job.retention_status,job.output_expires_at);
+}
+
+async function downloadStoredVideo({path,id,scene,button,userId,retentionStatus,expiresAt}) {
+  button.disabled=true;
+  try {
+    if(!mediaStillAvailable(retentionStatus,expiresAt))throw Error('File đã hết hạn hoặc đang được xóa.');
+    const actor=createClient(supabaseUrl,supabaseKey,{global:{headers:{Authorization:'Bearer '+session.access_token}},auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
+    const file=await actor.storage.from('brand-videos').download(path);if(file.error)throw file.error;
+    if(session?.user.id!==userId)return;
+    if(!mediaStillAvailable(retentionStatus,expiresAt))throw Error('File đã hết hạn trong lúc tải xuống.');
+    const url=URL.createObjectURL(file.data),link=document.createElement('a');
+    link.href=url;link.download=`muse-${id}${scene?`-doan-${scene}`:''}.mp4`;document.body.append(link);link.click();link.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
+  } catch(error) { if(session?.user.id===userId)message('Không tải được video: '+error.message,'error'); }
+  finally { if(button.isConnected)button.disabled=false; }
+}
+
+function updateJobsPagination() {
+  const controls=document.querySelector('#jobs-pagination');if(!controls)return;
+  controls.classList.add('history-controls');
+  if(!jobsTotalCount||jobsVisibleCount>=jobsTotalCount){controls.innerHTML=jobsVisibleCount>3?'<button class="text-button jobs-collapse" type="button">Thu gọn</button>':'';}
+  else controls.innerHTML=`<button class="outline jobs-more" type="button">Xem thêm lịch sử <span>(${Math.min(3,jobsTotalCount-jobsVisibleCount)} kết quả)</span></button>${jobsVisibleCount>3?'<button class="text-button jobs-collapse" type="button">Thu gọn</button>':''}`;
+  controls.querySelector('.jobs-more')?.addEventListener('click',async event=>{
+    const button=event.currentTarget;
+    if([...document.querySelectorAll('.script-editor')].some(editor=>editor.dataset.dirty==='true'||editor.dataset.busy==='true')){message('Hãy lưu lời thoại đang chỉnh sửa trước khi mở rộng lịch sử.','info');return;}
+    button.disabled=true;jobsVisibleCount+=3;jobsSignature='';await refreshJobs({force:true});
+  });
+  controls.querySelector('.jobs-collapse')?.addEventListener('click',async()=>{
+    if([...document.querySelectorAll('.script-editor')].some(editor=>editor.dataset.dirty==='true'||editor.dataset.busy==='true')){message('Hãy lưu lời thoại đang chỉnh sửa trước khi thu gọn lịch sử.','info');return;}
+    jobsVisibleCount=3;jobsSignature='';await refreshJobs({force:true});document.querySelector('#jobs')?.scrollIntoView({behavior:'smooth',block:'start'});
+  });
 }
 
 function renderScriptEditor(job,card,userId){
@@ -223,24 +306,44 @@ async function refreshJobs({force=false}={}) {
   if(!session||!document.querySelector('#jobs-list'))return;
   if(!force&&[...document.querySelectorAll('.script-editor')].some(editor=>editor.contains(document.activeElement)||editor.dataset.dirty==='true'||editor.dataset.busy==='true'))return;
   const userId=session.user.id,version=++jobsRefreshVersion;
-  const result=await supabase.from('brand_jobs').select('id,user_id,content,scene_count,scene_seconds,status,current_scene,reference_path,reference_sha256,final_path,error,error_code,retryable,attempt,max_attempts,schema_version,workflow_phase,script_revision,allow_summarize,plan,created_at,brand_scenes(scene_index,prompt,dialogue,action,planned_seconds,status,output_path,error,error_code,generation)').eq('user_id',userId).order('created_at',{ascending:false}).limit(50);
+  const result=await supabase.from('brand_jobs').select('id,user_id,content,scene_count,scene_seconds,status,current_scene,reference_path,reference_sha256,final_path,output_expires_at,retention_status,retention_attempts,retention_next_attempt_at,error,error_code,retryable,attempt,max_attempts,schema_version,workflow_phase,script_revision,allow_summarize,plan,created_at,brand_scenes(scene_index,prompt,dialogue,action,planned_seconds,status,output_path,error,error_code,generation)',{count:'exact'}).eq('user_id',userId).order('created_at',{ascending:false}).order('id',{ascending:false}).range(0,jobsVisibleCount-1);
   const list=document.querySelector('#jobs-list');if(!list||session?.user.id!==userId||version!==jobsRefreshVersion)return;
   if(!force&&[...list.querySelectorAll('.script-editor')].some(editor=>editor.contains(document.activeElement)||editor.dataset.dirty==='true'||editor.dataset.busy==='true'))return;
-  if(result.error){list.textContent='Không tải được lịch sử: '+result.error.message;return;}
+  if(result.error){list.textContent='Không tải được lịch sử: '+result.error.message;updateJobsPagination();return;}
+  jobsTotalCount=result.count??result.data.length;updateJobsPagination();
   if(sceneRetryAvailable===null&&result.data.some(job=>job.status==='error'&&job.schema_version===3&&job.brand_scenes?.some(scene=>['MUSE_OUTPUT_REJECTED','SCENE_MEDIA_INVALID','CUT_OFF_SPEECH','SPEECH_TOO_SHORT','SPEECH_TIMING','SPEECH_MISMATCH','UNEXPECTED_SPEECH'].includes(scene.error_code)))){
     const probe=await supabase.rpc('retry_brand_scene_v3',{p_id:'00000000-0000-0000-0000-000000000000',p_scene:0});
     sceneRetryAvailable=probe.error?.message==='Không tìm thấy yêu cầu';
   }
   if(session?.user.id!==userId||version!==jobsRefreshVersion)return;
-  const signature=JSON.stringify([sceneRetryAvailable,result.data]);
+  const signature=JSON.stringify([sceneRetryAvailable,jobsTotalCount,result.data]);
   if(signature===jobsSignature)return;
   jobsSignature=signature;
   if(!result.data.length){list.innerHTML='<div class="empty"><strong>Chưa có video nào</strong></div>';return;}
   // Other jobs can advance while a member watches or downloads a finished MP4.
   // Keep that player and its event listeners across the list refresh.
-  const openMedia=new Map([...list.querySelectorAll('.video-slot')].filter(slot=>slot.querySelector('video')).map(slot=>[slot.id,slot]));
+  const openMedia=new Map([...list.querySelectorAll('.video-slot')].filter(slot=>{
+    if(!slot.querySelector('video'))return false;
+    const job=result.data.find(item=>slot.id===`video-${item.id}`||slot.id.startsWith(`video-${item.id}-scene-`));
+    return job&&job.retention_status!=='deleting'&&job.retention_status!=='expired'&&job.retention_status!=='delete_failed'&&(!job.output_expires_at||Date.parse(job.output_expires_at)>Date.now());
+  }).map(slot=>[slot.id,slot]));
   const status={uploading:'Đang chờ ảnh',queued:'Đang chờ',script_queued:'Chờ tạo kịch bản',planning:'Đang viết kịch bản',script_ready:'Chờ bạn duyệt',video_queued:'Chờ tạo video',generating:'Đang tạo video',joining:'Đang ghép video',done:'Hoàn tất',error:'Lỗi',needs_review:'Lỗi',reviewed:'Lỗi'};
-  list.innerHTML=result.data.map(job=>{const scriptNeedsRetry=job.status==='error'&&job.schema_version===3&&job.workflow_phase==='script'&&!job.plan?.length;const displayError=job.error_code==='CONTENT_TOO_LONG'?'Muse chưa cô đọng được bản thô ở lượt trước. Hãy tạo lại kịch bản; Muse sẽ tự giữ ý chính và lược chi tiết phụ.':job.error;return `<article class="job-card"><div class="job-main"><div class="job-top"><span>${shortDate(job.created_at)}</span><span class="status status-${safe(job.status)}">${safe(scriptNeedsRetry?'Cần tạo lại kịch bản':status[job.status]||job.status)}</span></div><h3>${safe(job.content.slice(0,110))}</h3><p>${job.scene_count} ${job.schema_version===3?'đoạn':'cảnh'} · ${job.scene_seconds} giây/${job.schema_version===3?'đoạn':'cảnh'} · tổng ${job.scene_count*job.scene_seconds} giây</p><small>Mã yêu cầu: ${safe(job.id)}</small>${displayError?`<p class="job-error">${safe(displayError)}</p>`:''}${scriptNeedsRetry?'<p class="inline-warning">Chưa có kịch bản nên chưa thể tạo video. Sửa số đoạn nếu cần, rồi gửi lại bước “Tạo kịch bản”. Muse sẽ tự xử lý độ dài của bản thô.</p>':`<div class="scene-track">${Array.from({length:job.scene_count},(_,i)=>{const scene=job.brand_scenes?.find(x=>x.scene_index===i+1);return `<span class="scene-pill ${safe(scene?.status||'waiting')}">${String(i+1).padStart(2,'0')}</span>`;}).join('')}</div>`}${job.brand_scenes?.length?`<details><summary>Lời thoại từng đoạn</summary>${job.brand_scenes.sort((a,b)=>a.scene_index-b.scene_index).map(scene=>`<p><strong>Đoạn ${scene.scene_index} · ${scene.planned_seconds||job.scene_seconds} giây</strong><br>Lời thoại: ${safe(scene.dialogue||'Không có')}</p>`).join('')}</details>`:''}</div><div class="job-action">${job.status==='done'&&job.final_path?`<button class="outline view-video" data-path="${safe(job.final_path)}" data-id="${safe(job.id)}">Xem MP4</button>`:job.status==='uploading'?`<label class="outline">Chọn lại ảnh<input class="resume-file" type="file" accept="image/png,image/jpeg,image/webp" data-id="${safe(job.id)}"></label>`:job.status==='error'&&job.retryable&&job.attempt<job.max_attempts?`<button class="outline retry-job" data-id="${safe(job.id)}">Thử lại</button>`:''}</div><div class="video-slot" id="video-${safe(job.id)}"></div></article>`;}).join('');
+  list.innerHTML=result.data.map(job=>{
+    const scriptNeedsRetry=job.status==='error'&&job.schema_version===3&&job.workflow_phase==='script'&&!job.plan?.length;
+    const displayError=job.error_code==='CONTENT_TOO_LONG'?'Muse chưa cô đọng được bản thô ở lượt trước. Hãy tạo lại kịch bản; Muse sẽ tự giữ ý chính và lược chi tiết phụ.':job.error;
+    const finalActions=canDownloadFinal(job)?`<button class="outline view-video" data-path="${safe(job.final_path)}" data-id="${safe(job.id)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(job.output_expires_at||'')}">Xem video</button><button class="primary download-final" data-path="${safe(job.final_path)}" data-id="${safe(job.id)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(job.output_expires_at||'')}">Tải xuống</button>`:'';
+    const otherAction=job.status==='uploading'?`<label class="outline">Chọn lại ảnh<input class="resume-file" type="file" accept="image/png,image/jpeg,image/webp" data-id="${safe(job.id)}"></label>`:job.status==='error'&&job.retryable&&job.attempt<job.max_attempts?`<button class="outline retry-job" data-id="${safe(job.id)}">Thử lại</button>`:'';
+    return `<article class="job-card" data-job-id="${safe(job.id)}"><div class="job-main"><div class="job-top"><span>${shortDate(job.created_at)}</span><span class="status status-${safe(job.status)}">${safe(scriptNeedsRetry?'Cần tạo lại kịch bản':status[job.status]||job.status)}</span></div><div class="job-heading"><img class="job-thumbnail" alt="Ảnh tham chiếu" hidden><h3>${safe(job.content.slice(0,110))}</h3></div><p>${job.scene_count} ${job.schema_version===3?'đoạn':'cảnh'} · ${job.scene_seconds} giây/${job.schema_version===3?'đoạn':'cảnh'} · tổng ${job.scene_count*job.scene_seconds} giây</p><small>Mã yêu cầu: ${safe(job.id)}</small>${displayError?`<p class="job-error">${safe(displayError)}</p>`:''}${retentionMarkup(job)}${scriptNeedsRetry?'<p class="inline-warning">Chưa có kịch bản nên chưa thể tạo video. Sửa số đoạn nếu cần, rồi gửi lại bước “Tạo kịch bản”. Muse sẽ tự xử lý độ dài của bản thô.</p>':`<div class="scene-track">${Array.from({length:job.scene_count},(_,i)=>{const scene=job.brand_scenes?.find(x=>x.scene_index===i+1);return `<span class="scene-pill ${safe(scene?.status||'waiting')}">${String(i+1).padStart(2,'0')}</span>`;}).join('')}</div>`}${job.brand_scenes?.length?`<details><summary>Lời thoại từng đoạn</summary>${job.brand_scenes.sort((a,b)=>a.scene_index-b.scene_index).map(scene=>`<p><strong>Đoạn ${scene.scene_index} · ${scene.planned_seconds||job.scene_seconds} giây</strong><br>Lời thoại: ${safe(scene.dialogue||'Không có')}</p>`).join('')}</details>`:''}</div><div class="job-action">${finalActions}${otherAction}</div><div class="video-slot" id="video-${safe(job.id)}"></div></article>`;
+  }).join('');
+  result.data.forEach(async(job,index)=>{
+    if(!job.reference_path)return;
+    const thumbnail=list.children[index]?.querySelector('.job-thumbnail');if(!thumbnail)return;
+    const ttl=job.output_expires_at?Math.max(1,Math.floor((Date.parse(job.output_expires_at)-Date.now())/1000)):3600;
+    if(ttl<=0||!mediaStillAvailable(job.retention_status,job.output_expires_at))return;
+    const {data,error}=await supabase.storage.from('brand-references').createSignedUrl(job.reference_path,Math.min(3600,ttl));
+    if(error||!thumbnail.isConnected||!mediaStillAvailable(job.retention_status,job.output_expires_at))return;
+    thumbnail.src=data.signedUrl;thumbnail.hidden=false;
+  });
   result.data.forEach((job,i)=>{
     const track=list.children[i]?.querySelector('.scene-track');if(!track)return;
     const labels={waiting:'Chờ xử lý',generating:'Đang tạo',done:'Hoàn thành',error:'Thất bại',needs_review:'Cần kiểm tra'};
@@ -250,7 +353,7 @@ async function refreshJobs({force=false}={}) {
       const slotId=`video-${job.id}-scene-${index+1}`;
       const canResume=state==='error'&&job.status==='error'&&job.retryable&&job.attempt<job.max_attempts;
       const canRestart=sceneRetryAvailable&&state==='error'&&job.status==='error'&&job.schema_version===3&&!canResume&&['MUSE_OUTPUT_REJECTED','SCENE_MEDIA_INVALID','CUT_OFF_SPEECH','SPEECH_TOO_SHORT','SPEECH_TIMING','SPEECH_MISMATCH','UNEXPECTED_SPEECH'].includes(scene?.error_code);
-      return `<div class="scene-row"><span class="scene-pill ${safe(state)}">${String(index+1).padStart(2,'0')}</span><span>Đoạn ${index+1}/${job.scene_count}: <strong>${safe(labels[state]||state)}</strong>${state==='generating'?` · lần ${Number(scene?.generation||0)%3+1}/3`:''}${scene?.error&&state==='error'?`<small class="job-error">${safe(scene.error)}</small>`:''}</span>${state==='done'&&scene.output_path?`<button class="outline view-video view-scene" type="button" data-path="${safe(scene.output_path)}" data-id="${safe(job.id)}" data-scene="${index+1}" data-slot="${safe(slotId)}">Xem đoạn</button>`:canResume?`<button class="outline retry-job" type="button" data-id="${safe(job.id)}">Tiếp tục từ đoạn ${index+1}</button>`:canRestart?`<button class="outline retry-scene" type="button" data-id="${safe(job.id)}" data-scene="${index+1}">Tạo lại đoạn ${index+1}</button>`:''}<div class="video-slot" id="${safe(slotId)}"></div></div>`;
+      return `<div class="scene-row"><span class="scene-pill ${safe(state)}">${String(index+1).padStart(2,'0')}</span><span>Đoạn ${index+1}/${job.scene_count}: <strong>${safe(labels[state]||state)}</strong>${state==='generating'?` · lần ${Number(scene?.generation||0)%3+1}/3`:''}${scene?.error&&state==='error'?`<small class="job-error">${safe(scene.error)}</small>`:''}</span>${state==='done'&&scene.output_path&&mediaStillAvailable(job.retention_status,job.output_expires_at)?`<button class="outline view-video view-scene" type="button" data-path="${safe(scene.output_path)}" data-id="${safe(job.id)}" data-scene="${index+1}" data-slot="${safe(slotId)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(job.output_expires_at||'')}">Xem đoạn</button>`:canResume?`<button class="outline retry-job" type="button" data-id="${safe(job.id)}">Tiếp tục từ đoạn ${index+1}</button>`:canRestart?`<button class="outline retry-scene" type="button" data-id="${safe(job.id)}" data-scene="${index+1}">Tạo lại đoạn ${index+1}</button>`:''}<div class="video-slot" id="${safe(slotId)}"></div></div>`;
     }).join('');
   });
   for(const [id,slot] of openMedia){
@@ -305,25 +408,19 @@ async function refreshJobs({force=false}={}) {
     if(result.error)message(result.error.message,'error');else message(`Đã xếp lại đoạn ${button.dataset.scene}; các đoạn hoàn tất được giữ nguyên.`,'success');
     await refreshJobs({force:true});if(button.isConnected)button.disabled=false;
   }));
+  list.querySelectorAll('.download-final').forEach(button=>button.addEventListener('click',()=>downloadStoredVideo({path:button.dataset.path,id:button.dataset.id,button,userId,retentionStatus:button.dataset.retention,expiresAt:button.dataset.expiry||null})));
   list.querySelectorAll('.view-video').forEach(button=>button.addEventListener('click',async()=>{
-    button.disabled=true;const {data,error}=await supabase.storage.from('brand-videos').createSignedUrl(button.dataset.path,3600);
+    if(!mediaStillAvailable(button.dataset.retention,button.dataset.expiry||null)){message('File đã hết hạn hoặc đang được xóa.','error');refreshJobs({force:true});return;}
+    button.disabled=true;
+    const ttl=button.dataset.expiry?Math.max(1,Math.floor((Date.parse(button.dataset.expiry)-Date.now())/1000)):3600;
+    const {data,error}=await supabase.storage.from('brand-videos').createSignedUrl(button.dataset.path,Math.min(3600,ttl));
     if(session?.user.id!==userId||!button.isConnected)return;
     if(error){message(error.message,'error');button.disabled=false;return;}
+    if(!mediaStillAvailable(button.dataset.retention,button.dataset.expiry||null)){message('File đã hết hạn trong lúc mở.','error');refreshJobs({force:true});return;}
     const slot=document.getElementById(button.dataset.slot||`video-${button.dataset.id}`);
     if(!slot){button.disabled=false;return;}
     slot.innerHTML=`<video controls playsinline src="${safe(data.signedUrl)}"></video><button class="outline download-video" type="button">Tải MP4</button>`;button.hidden=true;
-    slot.querySelector('.download-video').addEventListener('click',async event=>{
-      const downloadButton=event.currentTarget;downloadButton.disabled=true;
-      const actor=createClient(supabaseUrl,supabaseKey,{global:{headers:{Authorization:'Bearer '+session.access_token}},auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
-      try{
-        const file=await actor.storage.from('brand-videos').download(button.dataset.path);if(file.error)throw file.error;
-        if(session?.user.id!==userId)return;
-        const url=URL.createObjectURL(file.data),link=document.createElement('a');
-        link.href=url;link.download=`muse-${button.dataset.id}${button.dataset.scene?`-doan-${button.dataset.scene}`:''}.mp4`;document.body.append(link);link.click();link.remove();
-        setTimeout(()=>URL.revokeObjectURL(url),60000);
-      }catch(cause){if(session?.user.id===userId)message('Không tải được video: '+cause.message,'error');}
-      finally{if(downloadButton.isConnected)downloadButton.disabled=false;}
-    });
+    slot.querySelector('.download-video').addEventListener('click',event=>downloadStoredVideo({path:button.dataset.path,id:button.dataset.id,scene:button.dataset.scene,button:event.currentTarget,userId,retentionStatus:button.dataset.retention,expiresAt:button.dataset.expiry||null}));
   }));
 }
 
