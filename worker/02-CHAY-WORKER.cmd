@@ -1,5 +1,5 @@
 @echo off
-title Muse Brand Worker V2
+title Muse Brand Worker V3
 cd /d "%~dp0"
 set "MUSE_ASR_BACKEND=docker"
 node worker-v2.mjs

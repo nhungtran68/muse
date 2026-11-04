@@ -8,7 +8,7 @@ import {publishableKey,supabaseUrl} from './config.js';
 import {MuseAdapterV2} from './muse-adapter-v2.mjs';
 import {SpeechAuditor} from './speech-audit.mjs';
 import {checkMediaToolsAvailable} from './ffmpeg.mjs';
-import {failBrandJobV2,processBrandJobV2} from './workflow-v2.mjs';
+import {failBrandJobV2,processBrandJobV2,processBrandScriptV3} from './workflow-v2.mjs';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const workerVersion=JSON.parse(await readFile(new URL('./package.json',import.meta.url),'utf8')).version;
@@ -40,11 +40,15 @@ try{
     await renew();if(lost)throw Error('Không thể giữ quyền worker.');
     timer=setInterval(()=>void renew(),20000);
     await startupStatus('ready');
-    console.log(`Worker v2 đã sẵn sàng (bản ${workerVersion}). Giữ cửa sổ này và Muse mở.`);
+    console.log(`Worker đã sẵn sàng (bản ${workerVersion}). Giữ cửa sổ này và Muse mở.`);
     while(!lost){
-      const job=await call('claim_brand_job_v2',{p_worker:workerId,p_token:token});
+      const job=await call('claim_brand_job_v3',{p_worker:workerId,p_token:token})||await call('claim_brand_job_v2',{p_worker:workerId,p_token:token});
       if(!job?.id){await sleep(5000);continue;}
-      try{await processBrandJobV2(job,{client:supabase,muse,auditor,workRoot:downloadsDir,workerId,leaseToken:token});console.log('Hoàn tất yêu cầu',job.id);}
+      try{
+        if(job.schema_version===3&&job.workflow_phase==='script')await processBrandScriptV3(job,{client:supabase,muse,workRoot:downloadsDir,workerId,leaseToken:token});
+        else await processBrandJobV2(job,{client:supabase,muse,auditor,workRoot:downloadsDir,workerId,leaseToken:token});
+        console.log(job.schema_version===3&&job.workflow_phase==='script'?'Kịch bản chờ khách duyệt':'Hoàn tất yêu cầu',job.id);
+      }
       catch(error){
         console.error('Yêu cầu lỗi',job.id,error.message);
         if(!lost)await failBrandJobV2(job,error,{client:supabase,workerId,leaseToken:token}).catch(err=>console.error('Không lưu được lỗi:',err.message));

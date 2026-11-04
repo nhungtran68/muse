@@ -15,8 +15,21 @@ async function rpc(client,name,args){const result=await client.rpc(name,args);if
 async function download(client,bucket,key){const result=await client.storage.from(bucket).download(key);if(result.error)throw result.error;return Buffer.from(await result.data.arrayBuffer());}
 async function upload(client,key,file){const result=await client.storage.from('brand-videos').upload(key,await readFile(file),{contentType:'video/mp4',upsert:false});if(result.error)throw result.error;}
 
+export async function processBrandScriptV3(job,{client,muse,workRoot,workerId,leaseToken}){
+  if(job.schema_version!==3||job.status!=='planning'||job.workflow_phase!=='script'||job.scene_seconds!==10||!job.claim_token)throw Error('Yêu cầu kịch bản không hợp lệ.');
+  const auth={p_id:job.id,p_worker:workerId,p_token:leaseToken,p_claim:job.claim_token};
+  const dir=path.join(workRoot,job.id,job.claim_token);await mkdir(dir,{recursive:true});
+  const reference=await download(client,'brand-references',job.reference_path);
+  if(sha256(reference)!==job.reference_sha256)throw Object.assign(Error('Ảnh tham chiếu không khớp với ảnh đã gửi.'),{code:'REFERENCE_MISMATCH',retryable:false});
+  const image=path.join(dir,'reference.'+extension(reference));await writeFile(image,reference);
+  const conversation=await muse.beginJob(job);
+  await rpc(client,'update_brand_job_v2',{...auth,p_patch:{conversation_ref:conversation}});
+  const storyboard=await muse.storyboard(job,image,{onConversation:ref=>rpc(client,'update_brand_job_v2',{...auth,p_patch:{conversation_ref:ref}})});
+  return rpc(client,'complete_brand_script_v3',{...auth,p_plan:storyboard.scenes,p_analysis:storyboard.analysis,p_outline:storyboard.outline});
+}
+
 export async function processBrandJobV2(job,{client,muse,auditor,workRoot,workerId,leaseToken}){
-  if(job.schema_version!==2||!job.claim_token||!workerId||!leaseToken)throw Error('Thiếu quyền xử lý của yêu cầu.');
+  if(![2,3].includes(job.schema_version)||(job.schema_version===3&&(job.workflow_phase!=='video'||job.status!=='generating'||job.scene_seconds!==10))||!job.claim_token||!workerId||!leaseToken)throw Error('Thiếu quyền xử lý của yêu cầu.');
   const auth={p_id:job.id,p_worker:workerId,p_token:leaseToken,p_claim:job.claim_token};
   const updateJob=patch=>rpc(client,'update_brand_job_v2',{...auth,p_patch:patch});
   const updateScene=(index,patch)=>rpc(client,'update_brand_scene_v2',{...auth,p_scene:index,p_patch:patch});

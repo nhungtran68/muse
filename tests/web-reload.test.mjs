@@ -41,9 +41,9 @@ test('a member reloads while a job is processing; another member sees only their
   const page=await context.newPage();await page.goto(`http://127.0.0.1:${port}`);
   await page.locator('#auth-email').fill(email);await page.locator('#auth-password').fill('local-test-password-123');await page.locator('#auth-form button[type=submit]').click();
   await page.locator('#jobs-list').getByText(`Nội dung riêng ${email}`).waitFor({timeout:20000});
-  assert.match(await page.locator('#jobs-list').innerText(),/Đang xử lý/);
+  assert.match(await page.locator('#jobs-list').innerText(),/Đang tạo video/);
   await page.reload();await page.locator('#jobs-list').getByText(`Nội dung riêng ${email}`).waitFor({timeout:20000});
-  assert.match(await page.locator('#jobs-list').innerText(),/Đang xử lý/);
+  assert.match(await page.locator('#jobs-list').innerText(),/Đang tạo video/);
   const other=Object.keys(ids).find(item=>item!==email);assert.doesNotMatch(await page.locator('#jobs-list').innerText(),new RegExp(other));
  }
  // A history response from the previous login must never enter the new user's DOM.

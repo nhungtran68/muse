@@ -1,5 +1,7 @@
 import {MuseAdapter} from './muse-adapter.mjs';
 import {buildStoryboardPrompt,parseMarkedJson,validateStoryboard} from '../shared/storyboard.mjs';
+import {clipRequest} from '../shared/brand-video-prompt.mjs';
+import {createHash} from 'node:crypto';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
@@ -116,6 +118,9 @@ export class MuseAdapterV2 extends MuseAdapter {
     const page=this.requirePage();
     const key=`BRAND_${job.id.replaceAll('-','_')}_SCENE_${scene.index}_GEN_${scene.generation||0}`;
     if(receipt&&receipt.key!==key)throw Object.assign(Error('Biên nhận cảnh không khớp lần tạo; cần kiểm tra trước khi tiếp tục.'),{code:'UNCERTAIN_SUBMISSION',retryable:false});
+    const videoPrompt=job.schema_version===3?clipRequest(job,scene):null;
+    const promptHash=videoPrompt?createHash('sha256').update(videoPrompt).digest('hex'):null;
+    if(receipt?.prompt_sha256&&receipt.prompt_sha256!==promptHash)throw Object.assign(Error('Mẫu prompt hoặc lời thoại đã thay đổi sau lần gửi trước; cần kiểm tra.'),{code:'UNCERTAIN_SUBMISSION',retryable:false});
     await this.closePreview();
     await this.composer().waitFor({state:'visible',timeout:this.composerTimeoutMs});
     let response=await this.sceneResponse(key);
@@ -133,8 +138,11 @@ export class MuseAdapterV2 extends MuseAdapter {
       const input=await this.cleanComposer();
       await this.attachReference(imagePath);
       const dialogue=scene.dialogue?`Đọc lời thoại tiếng Việt đúng nguyên văn, không thêm hoặc bớt. Nếu không có nhân vật trong hình, dùng giọng thuyết minh. Đọc chậm tự nhiên, trải đều lời trong khoảng 65–90% thời lượng cảnh, bắt đầu sớm, không dồn lời rồi kết thúc quá sớm, không kéo dài âm hoặc lặp từ: “${scene.dialogue}”.`: 'Không có lời thoại hoặc giọng nói.';
-      await input.fill(`${key}. Tạo đúng MỘT video độc lập, dùng ảnh đính kèm, ${job.scene_seconds} giây, khổ dọc 9:16. Không dùng dữ liệu từ khách hàng khác hoặc cuộc trò chuyện khác. Không thêm chữ, không đăng mạng xã hội. Nếu không hỗ trợ thời lượng, báo lỗi thay vì tự đổi. ${dialogue} Hành động và biểu cảm: ${scene.action}. Mô tả cảnh: ${scene.prompt}`);
-      await onBeforeSend({key,url:page.url(),prepared_at:new Date().toISOString()});
+      const requestText=videoPrompt?`${key}. ${videoPrompt}`:`${key}. Tạo đúng MỘT video độc lập, dùng ảnh đính kèm, ${job.scene_seconds} giây, khổ dọc 9:16. Không dùng dữ liệu từ khách hàng khác hoặc cuộc trò chuyện khác. Không thêm chữ, không đăng mạng xã hội. Nếu không hỗ trợ thời lượng, báo lỗi thay vì tự đổi. ${dialogue} Hành động và biểu cảm: ${scene.action}. Mô tả cảnh: ${scene.prompt}`;
+      await input.fill(requestText);
+      await sleep(400);
+      if(await input.inputValue()!==requestText)throw Object.assign(Error('Ô nhập Muse đã tải lại trước khi gửi; không gửi lời thoại có thể bị thay đổi.'),{code:'MUSE_COMPOSER_RELOADED'});
+      await onBeforeSend({key,url:page.url(),prepared_at:new Date().toISOString(),...(promptHash?{prompt_sha256:promptHash,script_revision:job.script_revision,template_version:job.video_prompt_version}:{})});
       await input.press('Enter');
     }
     const until=Date.now()+this.sceneTimeoutMs;
