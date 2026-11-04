@@ -9,3 +9,4 @@ worker/.env*
 *.log
 supabase/.temp/
 supabase/.branches/
+.vercel

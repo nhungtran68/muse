@@ -5,6 +5,20 @@ import {createHash} from 'node:crypto';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
+export function summarizeMuseReply(text){
+  return String(text||'').replace(/https?:\/\/\S+/gi,'[liên kết]').replace(/[A-Za-z0-9_-]{40,}/g,'[mã]').replace(/\s+/g,' ').trim().slice(0,240);
+}
+
+export function museVideoRejection(text){
+  const sentences=String(text||'').split(/(?<=[.!?])\s+|\n+/u);
+  return sentences.some(sentence=>{
+    // A quoted instruction such as "If unsupported, report an error" is not
+    // itself a refusal. Only inspect statements from this request's reply.
+    if(/^\s*(?:nếu|if)(?:\s|[:,])/iu.test(sentence))return false;
+    return /(?:(?:không|chưa)\s+thể\s+(?:tạo|xuất|render|giao|trả|cung cấp)(?:\s+được)?\s+(?:file\s+)?(?:video|clip|mp4)|không\s+(?:tạo|xuất|render|giao|trả|gửi)\s+được\s+(?:file\s+)?(?:video|clip|mp4)|không\s+(?:giao|trả|gửi)\s+(?:file\s+)?(?:video|clip|mp4)|(?:không|chưa)(?:\s+được)?\s+hỗ trợ|not supported|(?:cannot|can't|unable to)\s+(?:create|generate|render|deliver|provide)(?:\s+\w+){0,3}\s+(?:video|clip|mp4))/iu.test(sentence);
+  });
+}
+
 // Each job needs its own conversation. If Muse changes its controls, stop instead
 // of reusing another customer's conversation.
 export class MuseAdapterV2 extends MuseAdapter {
@@ -23,19 +37,17 @@ export class MuseAdapterV2 extends MuseAdapter {
       const video = elements.find(element => element.isConnected && !element.closest('[role="dialog"]') && inReply(element));
       const replies = [...document.querySelectorAll('.hatch-chat-groupable-bubble:not(.bg-chat-user-bubble)')].filter(inReply);
       const text = replies.map(element => element.textContent).join('\n');
-      const rejected = !video && /báo lỗi|not supported|cannot generate|unable to generate/i.test(text)
-        && /không giao video|không hỗ trợ|not supported|cannot generate|unable to generate/i.test(text);
-      return {requested: Boolean(anchor), video: video || null, rejected};
+      return {requested: Boolean(anchor), video: video || null, text};
     }, {elements, key: requestKey});
     await Promise.all(elements.map(element => element.dispose()));
     const requestedHandle = await state.getProperty('requested');
-    const rejectedHandle = await state.getProperty('rejected');
-    const requested = await requestedHandle.jsonValue(), rejected = await rejectedHandle.jsonValue();
-    await requestedHandle.dispose(); await rejectedHandle.dispose();
+    const textHandle = await state.getProperty('text');
+    const requested = await requestedHandle.jsonValue(), responseText = await textHandle.jsonValue();
+    await requestedHandle.dispose(); await textHandle.dispose();
     const handle = await state.getProperty('video'), video = handle.asElement();
     if (!video) await handle.dispose();
     await state.dispose();
-    return {requested, video, rejected};
+    return {requested, video, rejected:!video&&museVideoRejection(responseText),responseText:summarizeMuseReply(responseText)};
   }
 
   async beginJob(job) {
@@ -118,8 +130,14 @@ export class MuseAdapterV2 extends MuseAdapter {
     const page=this.requirePage();
     const key=`BRAND_${job.id.replaceAll('-','_')}_SCENE_${scene.index}_GEN_${scene.generation||0}`;
     if(receipt&&receipt.key!==key)throw Object.assign(Error('Biên nhận cảnh không khớp lần tạo; cần kiểm tra trước khi tiếp tục.'),{code:'UNCERTAIN_SUBMISSION',retryable:false});
-    const videoPrompt=job.schema_version===3?clipRequest(job,scene):null;
-    const promptHash=videoPrompt?createHash('sha256').update(videoPrompt).digest('hex'):null;
+    let videoPrompt=job.schema_version===3?clipRequest(job,scene):null;
+    let promptHash=videoPrompt?createHash('sha256').update(videoPrompt).digest('hex'):null;
+    if(receipt?.prompt_sha256&&receipt.prompt_sha256!==promptHash&&job.schema_version===3){
+      // Resume an already sent request with its original prompt hash. Never
+      // submit it again merely because the worker was upgraded.
+      const previous=clipRequest(job,scene,{legacy:true});
+      if(createHash('sha256').update(previous).digest('hex')===receipt.prompt_sha256){videoPrompt=previous;promptHash=receipt.prompt_sha256;}
+    }
     if(receipt?.prompt_sha256&&receipt.prompt_sha256!==promptHash)throw Object.assign(Error('Mẫu prompt hoặc lời thoại đã thay đổi sau lần gửi trước; cần kiểm tra.'),{code:'UNCERTAIN_SUBMISSION',retryable:false});
     await this.closePreview();
     await this.composer().waitFor({state:'visible',timeout:this.composerTimeoutMs});
@@ -146,12 +164,13 @@ export class MuseAdapterV2 extends MuseAdapter {
       await input.press('Enter');
     }
     const until=Date.now()+this.sceneTimeoutMs;
-    while(Date.now()<until){
+    while(true){
       await this.assertConnected();
       if(response.video){try{await response.video.click();return await this.downloadScene(`${job.id}-${scene.index}`);}finally{await response.video.dispose();}}
-      if(response.rejected)throw Object.assign(Error(`Muse báo lỗi và không giao video cảnh ${scene.index} theo thông số đã chọn. Cần quản trị kiểm tra.`),{code:'MUSE_OUTPUT_REJECTED',retryable:false});
-      await sleep(this.pollMs);response=await this.sceneResponse(key);
+      if(response.rejected)throw Object.assign(Error(`Muse không giao video cảnh ${scene.index}: ${response.responseText||'Dịch vụ từ chối thông số đã chọn.'}`),{code:'MUSE_OUTPUT_REJECTED',retryable:false});
+      const remaining=until-Date.now();if(remaining<=0)break;
+      await sleep(Math.min(this.pollMs,remaining));response=await this.sceneResponse(key);
     }
-    throw Object.assign(Error(`Chưa nhận được video cảnh ${scene.index}; có thể thử lấy tiếp kết quả đã gửi, không tạo trùng.`),{code:'MUSE_TIMEOUT',retryable:true});
+    throw Object.assign(Error(`Chưa nhận được video cảnh ${scene.index}; có thể thử lấy tiếp kết quả đã gửi, không tạo trùng.${response.responseText?' Muse trả lời: '+response.responseText:''}`),{code:'MUSE_TIMEOUT',retryable:true});
   }
 }

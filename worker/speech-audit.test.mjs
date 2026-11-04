@@ -42,3 +42,17 @@ test('never hints ungrounded names, an entire sentence, or a name that forms the
  assert.equal((await probe.instance.verify('clip.mp4',terminal,10)).ok,false);
  assert.equal(probe.calls.length,1);
 });
+
+test('rechecks a terminal brand only when its first and final words were already heard',async()=>{
+ const terminal={dialogue:'Xin chào mọi người, hôm nay mình rất vui được chia sẻ cùng mọi người video giới thiệu về Đại Ngân Farm.',source_quotes:['Giới thiệu về Đại Ngân Farm']};
+ const misheard=terminal.dialogue.replace('Đại Ngân Farm','đại gân farm');
+ const probe=auditor([transcript(misheard,7.37),transcript(terminal.dialogue,7.39)]);
+ const result=await probe.instance.verify('clip.mp4',terminal,10);
+ assert.equal(result.ok,true);assert.equal(result.verification,'grounded_vocabulary');
+ assert.deepEqual(probe.calls,[{},{vocabulary:['Đại Ngân Farm']}]);
+ for(const ending of ['Đại Ngân','Ngân Farm','Đại Gân']){
+  const cut=auditor([transcript(terminal.dialogue.replace('Đại Ngân Farm',ending),7.37)]);
+  assert.equal((await cut.instance.verify('clip.mp4',terminal,10)).ok,false);
+  assert.equal(cut.calls.length,1);
+ }
+});

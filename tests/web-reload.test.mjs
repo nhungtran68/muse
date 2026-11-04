@@ -32,9 +32,13 @@ test('a member reloads while a job is processing; another member sees only their
    if(url.pathname==='/rest/v1/profiles')return route.fulfill(json({id:ids[active],email:active,role:'member',approved:true}));
    if(url.pathname==='/rest/v1/app_settings')return route.fulfill(json({id:true,enabled:true,max_scenes:4,daily_limit:30,scene_seconds:10}));
    if(url.pathname==='/rest/v1/video_modes')return route.fulfill(json([{seconds:10}]));
+   if(url.pathname.startsWith('/storage/v1/object/sign/brand-videos/')){
+    assert.ok(url.pathname.includes(ids[active]),'Only the active owner may sign a scene');
+    return route.fulfill(json({signedURL:`/object/sign/brand-videos/${ids[active]}/scene-1.mp4?token=fixture`}));
+   }
    if(url.pathname==='/rest/v1/brand_jobs'){
     assert.equal(url.searchParams.get('user_id'),`eq.${ids[active]}`);
-    return route.fulfill(json([{id:active==='one@example.test'?'aaaaaaaa-0000-4000-8000-000000000001':'bbbbbbbb-0000-4000-8000-000000000001',user_id:ids[active],content:`Nội dung riêng ${active}`,scene_count:2,scene_seconds:10,status:'generating',current_scene:1,created_at:'2026-11-03T00:00:00Z',brand_scenes:[{scene_index:1,status:'done',prompt:'Cảnh mẫu',dialogue:'Lời thoại mẫu',action:'Hành động',planned_seconds:10}]}]));
+    return route.fulfill(json([{id:active==='one@example.test'?'aaaaaaaa-0000-4000-8000-000000000001':'bbbbbbbb-0000-4000-8000-000000000001',user_id:ids[active],content:`Nội dung riêng ${active}`,scene_count:2,scene_seconds:10,status:'generating',current_scene:1,created_at:'2026-11-03T00:00:00Z',brand_scenes:[{scene_index:1,status:'done',prompt:'Cảnh mẫu',dialogue:'Lời thoại mẫu',action:'Hành động',planned_seconds:10,output_path:`${ids[active]}/scene-1.mp4`},{scene_index:2,status:'waiting'}]}]));
    }
    return route.fulfill(json({message:'Unexpected local test route'},404));
   });
@@ -42,6 +46,10 @@ test('a member reloads while a job is processing; another member sees only their
   await page.locator('#auth-email').fill(email);await page.locator('#auth-password').fill('local-test-password-123');await page.locator('#auth-form button[type=submit]').click();
   await page.locator('#jobs-list').getByText(`Nội dung riêng ${email}`).waitFor({timeout:20000});
   assert.match(await page.locator('#jobs-list').innerText(),/Đang tạo video/);
+  assert.match(await page.locator('#jobs-list').innerText(),/Đoạn 1\/2: Hoàn thành/);
+  assert.match(await page.locator('#jobs-list').innerText(),/Đoạn 2\/2: Chờ xử lý/);
+  await page.getByRole('button',{name:'Xem đoạn'}).click();
+  await page.locator('.scene-row video').waitFor({timeout:10000});
   await page.reload();await page.locator('#jobs-list').getByText(`Nội dung riêng ${email}`).waitFor({timeout:20000});
   assert.match(await page.locator('#jobs-list').innerText(),/Đang tạo video/);
   const other=Object.keys(ids).find(item=>item!==email);assert.doesNotMatch(await page.locator('#jobs-list').innerText(),new RegExp(other));

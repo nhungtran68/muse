@@ -112,7 +112,11 @@ export function checkTranscript(expected,transcript,words,seconds){
   for(let i=1;i<=a.length;i++){let prev=row[0];row[0]=i;for(let j=1;j<=b.length;j++){const old=row[j];row[j]=Math.min(row[j]+1,row[j-1]+1,prev+(a[i-1]===b[j-1]?0:1));prev=old;}}
   const wer=row[b.length]/a.length,spoken=(words||[]).filter(w=>Number.isFinite(w.start)&&Number.isFinite(w.end));
   const start=spoken[0]?.start??null,end=spoken.at(-1)?.end??null;
-  const tail=a.slice(-Math.min(3,a.length)).join(' '),hasTail=normalizeSpeech(transcript).includes(tail);
+  const ending=a.slice(-Math.min(3,a.length)),heardEnding=b.slice(-ending.length);
+  const oneLetterVariant=(left,right)=>left.length===right.length&&[...left].filter((letter,i)=>letter!==right[i]).length===1;
+  const closeTail=ending.length===3&&heardEnding.length===3&&ending.filter((word,i)=>word!==heardEnding[i]).length===1
+    &&ending.some((word,i)=>word!==heardEnding[i]&&oneLetterVariant(word,heardEnding[i]));
+  const hasTail=normalizeSpeech(transcript).includes(ending.join(' '))||closeTail;
   const inTime=start!==null&&start>=0&&end<=seconds-.10;
   const spokenSeconds=start===null?0:Math.round((end-start)*100)/100,tooShort=spokenSeconds<seconds*.60;
   return {ok:wer<=.25&&hasTail&&inTime&&!tooShort,word_error_rate:Math.round(wer*1000)/1000,spoken_start:start,spoken_end:end,spoken_seconds:spokenSeconds,tail_present:hasTail,reason:!inTime?'SPEECH_TIMING':!hasTail?'CUT_OFF_SPEECH':wer>.25?'SPEECH_MISMATCH':tooShort?'SPEECH_TOO_SHORT':null};

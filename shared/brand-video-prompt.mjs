@@ -46,15 +46,30 @@ export function compileBrandVideoPrompt(sceneCount,dialogues){
   return prompt;
 }
 
-// Muse currently returns one ten-second clip per request. The full fixed
-// template is included verbatim for every clip; this operational prefix scopes
-// just the clip being requested while the worker later joins them in order.
-export function clipRequest(job,scene){
+// Muse renders one clip per request. Sending the complete N-part script with
+// each request made later clips ambiguous and sometimes produced square video.
+// Keep the approved full template for the final plan, but send only this part's
+// unchanged dialogue to Muse. Every request attaches the original image.
+export const BRAND_CLIP_TEMPLATE=`Dùng ảnh tham chiếu gốc đính kèm làm hình ảnh tham chiếu duy nhất. Tạo đúng MỘT clip cho ĐOẠN {{INDEX}}/{{COUNT}}, dài chính xác 10 giây, khung hình dọc 9:16. Trả file MP4 dọc; nếu không thể tạo khung 9:16 thì báo lỗi, không trả clip vuông, không cắt hay kéo giãn sau khi tạo.
+
+Giữ nguyên nhân vật, khuôn mặt, tuổi, vóc dáng, kiểu tóc, trang phục, phông nền, ánh sáng, góc máy và vị trí trong ảnh gốc. Không làm đẹp hoặc tạo khuôn mặt mới. Chỉ một nhân vật nói với camera; cử động nhẹ ở miệng, mắt, đầu và tay. Máy quay cố định; không đổi cảnh, không thêm người, vật thể, chữ hoặc logo.
+
+Giữ giọng nói tiếng Việt miền Nam tự nhiên, cùng âm sắc, cao độ và tốc độ như các đoạn trước của yêu cầu này. Chỉ đọc đúng nguyên văn lời thoại dưới đây, không đọc tiêu đề hoặc chỉ dẫn, không thêm bớt từ. Nói khoảng 2,5 đến 3 từ mỗi giây, ngắt nghỉ tự nhiên và đọc hết câu vào khoảng giây thứ 8 đến 9. Không đọc dồn hoặc kéo dài âm bất thường.
+
+LỜI THOẠI DUY NHẤT CỦA CLIP NÀY: “{{DIALOGUE}}”`;
+
+export function clipRequest(job,scene,{legacy=false}={}){
   if(job.schema_version!==3||job.scene_seconds!==10||job.video_prompt_version!==BRAND_VIDEO_TEMPLATE_VERSION)throw Error('Cấu hình mẫu prompt của yêu cầu không khớp bản worker.');
   const plan=job.plan;
   if(!Array.isArray(plan)||plan.length!==job.scene_count||plan.some((part,i)=>part.index!==i+1||part.seconds!==10))throw Error('Kịch bản đã duyệt không khớp số đoạn.');
   const selected=plan[scene.index-1];
   if(!selected||selected.dialogue!==scene.dialogue)throw Error('Lời thoại đoạn không khớp kịch bản đã duyệt.');
-  const full=compileBrandVideoPrompt(job.scene_count,plan.map(part=>part.dialogue));
-  return `CHỈ THỰC HIỆN ĐOẠN ${scene.index}/${job.scene_count} TRONG LƯỢT NÀY. Tạo đúng MỘT clip 10 giây, khung dọc 9:16, rồi trả MP4. Phần tổng thời lượng trong mẫu dưới đây mô tả video sau khi hệ thống ghép các clip, không yêu cầu tạo cả chuỗi trong lượt này. Chỉ đọc nguyên văn lời thoại của ĐOẠN ${scene.index}; không đọc lời thoại đoạn khác, tiêu đề hay chỉ dẫn. Nói tiếng Việt miền Nam tự nhiên, chậm rãi. Dùng ảnh tham chiếu gốc đính kèm của yêu cầu này. Giữ cùng nhân vật, trang phục, bối cảnh và giọng nói như các đoạn trước trong cùng cuộc trò chuyện. Nếu không thể đáp ứng thời lượng hoặc ảnh tham chiếu, hãy báo lỗi, không tự đổi cấu hình.\n\n${full}`;
+  if(legacy){
+    const full=compileBrandVideoPrompt(job.scene_count,plan.map(part=>part.dialogue));
+    return `CHỈ THỰC HIỆN ĐOẠN ${scene.index}/${job.scene_count} TRONG LƯỢT NÀY. Tạo đúng MỘT clip 10 giây, khung dọc 9:16, rồi trả MP4. Phần tổng thời lượng trong mẫu dưới đây mô tả video sau khi hệ thống ghép các clip, không yêu cầu tạo cả chuỗi trong lượt này. Chỉ đọc nguyên văn lời thoại của ĐOẠN ${scene.index}; không đọc lời thoại đoạn khác, tiêu đề hay chỉ dẫn. Nói tiếng Việt miền Nam tự nhiên ở nhịp khoảng 2,5 đến 3 từ mỗi giây, ngắt nghỉ vừa phải; đọc hết câu vào khoảng giây thứ 8 đến 9. Không đọc gấp, không kéo dài âm bất thường và không thay đổi lời thoại. Dùng ảnh tham chiếu gốc đính kèm của yêu cầu này. Giữ cùng nhân vật, trang phục, bối cảnh và giọng nói như các đoạn trước trong cùng cuộc trò chuyện. Nếu không thể đáp ứng thời lượng hoặc ảnh tham chiếu, hãy báo lỗi, không tự đổi cấu hình.\n\n${full}`;
+  }
+  validateEditedDialogue(scene.dialogue,scene.index);
+  const prompt=BRAND_CLIP_TEMPLATE.replaceAll('{{INDEX}}',String(scene.index)).replaceAll('{{COUNT}}',String(job.scene_count)).replace('{{DIALOGUE}}',scene.dialogue);
+  if(/\{\{|\}\}|…/.test(prompt))throw Error('Prompt cảnh còn biến chưa thay.');
+  return prompt;
 }
