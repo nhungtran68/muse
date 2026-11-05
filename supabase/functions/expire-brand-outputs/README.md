@@ -19,7 +19,9 @@ verified Muse deletion API is integrated in this application.
    public API key and the function has no caller-controlled job/path input.
 2. Apply `20261104120000_brand_output_retention.sql` and
    `20261104150000_brand_asset_individual_expiry.sql`, then
-   `20261104160000_allow_expired_reference_path_null.sql`. They schedule Cron
+   `20261104160000_allow_expired_reference_path_null.sql`,
+   `20261105001000_preserve_active_job_media_reads.sql` and
+   `20261105002000_resolve_pg_net_http_function.sql`. They schedule Cron
    and do not backfill existing history.
 3. Add this environment's public project URL and publishable key to Vault once
    (for example, in the Supabase SQL editor):
@@ -41,6 +43,10 @@ The Edge Function uses its runtime `SUPABASE_SERVICE_ROLE_KEY` to make Storage
 API calls and invoke the restricted claim/completion RPCs. Anyone with the public
 key can trigger a run, but cannot choose targets or bypass the database expiry
 condition; the response contains counts only.
+
+While a job is unfinished, an approved admin/worker can still read an expired
+scene to resume or join that job. Member downloads retain their normal expiry.
+Completed jobs do not receive this operational read exception.
 
 ## Retry and recovery
 

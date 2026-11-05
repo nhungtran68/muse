@@ -13,6 +13,25 @@ declare
   active_id constant uuid := '99000000-0000-4000-8000-000000000005';
   partial_id constant uuid := '99000000-0000-4000-8000-000000000006';
 begin
+  -- These identities exist only inside this rollback transaction. Refuse to
+  -- reuse an existing account rather than changing any real user's profile.
+  if exists(select 1 from auth.users where id in (member_a,member_b))
+    or exists(select 1 from public.profiles where id in (member_a,member_b)) then
+    raise exception 'Retention fixture user IDs are already in use';
+  end if;
+  insert into auth.users(
+    id,email,aud,role,email_confirmed_at,raw_app_meta_data,raw_user_meta_data,created_at,updated_at
+  ) values
+    (member_a,'retention-a-'||extensions.gen_random_uuid()::text||'@example.invalid',
+      'authenticated','authenticated',now(),'{"provider":"email","providers":["email"]}'::jsonb,'{}'::jsonb,now(),now()),
+    (member_b,'retention-b-'||extensions.gen_random_uuid()::text||'@example.invalid',
+      'authenticated','authenticated',now(),'{"provider":"email","providers":["email"]}'::jsonb,'{}'::jsonb,now(),now());
+  -- The application's auth-user trigger creates the matching profiles.
+  if (select count(*) from public.profiles where id in (member_a,member_b))<>2 then
+    raise exception 'Retention fixture auth users did not receive application profiles';
+  end if;
+  update public.profiles set role='member',approved=true where id in (member_a,member_b);
+
   insert into public.brand_jobs(id,user_id,content,scene_count,scene_seconds,reference_path,status,final_path)
   values
     (retry_id,member_a,'Retention retry fixture',1,10,member_a::text||'/'||retry_id::text||'/reference','generating',member_a::text||'/'||retry_id::text||'/final.mp4'),
@@ -44,15 +63,17 @@ begin
   values
     (retry_id,1,'same character','retry dialogue','done',member_a::text||'/'||retry_id::text||'/scene-01.mp4'),
     (success_id,1,'same character','success dialogue','done',member_b::text||'/'||success_id::text||'/scene-01.mp4'),
+    (pending_id,1,'same character','long-running job scene','done',member_a::text||'/'||pending_id::text||'/scene-01.mp4'),
     (partial_id,1,'same character','expired scene','done',member_b::text||'/'||partial_id::text||'/scene-01.mp4'),
     (partial_id,2,'same character','later scene','done',member_b::text||'/'||partial_id::text||'/scene-02.mp4');
   update public.brand_scenes set output_expires_at=now()-interval '1 second'
-    where job_id in (retry_id,success_id) or (job_id=partial_id and scene_index=1);
+    where job_id in (retry_id,success_id,pending_id) or (job_id=partial_id and scene_index=1);
   insert into storage.objects(bucket_id,name) values
     ('brand-videos',member_a::text||'/'||active_id::text||'/final.mp4'),
     ('brand-references',member_a::text||'/'||active_id::text||'/reference'),
     ('brand-videos',member_b::text||'/'||success_id::text||'/final.mp4'),
     ('brand-references',member_b::text||'/'||success_id::text||'/reference'),
+    ('brand-videos',member_a::text||'/'||pending_id::text||'/scene-01.mp4'),
     ('brand-videos',member_b::text||'/'||partial_id::text||'/scene-01.mp4'),
     ('brand-videos',member_b::text||'/'||partial_id::text||'/scene-02.mp4');
 end $$;
@@ -73,8 +94,34 @@ begin
   if exists(select 1 from storage.objects where name='e2f83e79-0133-4c73-9ddf-7ca7fac01b0d/99000000-0000-4000-8000-000000000001/final.mp4') then
     raise exception 'Owner can read an output after its server expiry';
   end if;
+  if exists(select 1 from storage.objects where name='e2f83e79-0133-4c73-9ddf-7ca7fac01b0d/99000000-0000-4000-8000-000000000003/scene-01.mp4') then
+    raise exception 'Member can read an expired scene merely because its job is still processing';
+  end if;
 end $$;
 reset role;
+
+-- Worker access is administrative and only extends scene reads for unfinished
+-- jobs. Restore the fixture member's original profile before other RLS checks.
+create temporary table retention_test_admin_restore on commit drop as
+  select id, role, approved from public.profiles
+  where id='3cda2513-82f4-4b80-9918-41f42d8839fb';
+update public.profiles set role='admin', approved=true
+  where id='3cda2513-82f4-4b80-9918-41f42d8839fb';
+set local role authenticated;
+select set_config('request.jwt.claim.sub','3cda2513-82f4-4b80-9918-41f42d8839fb',true);
+do $$
+begin
+  if not public.is_admin() then raise exception 'Worker fixture requires an approved administrator'; end if;
+  if not exists(select 1 from storage.objects where name='e2f83e79-0133-4c73-9ddf-7ca7fac01b0d/99000000-0000-4000-8000-000000000003/scene-01.mp4') then
+    raise exception 'Worker cannot recover an expired scene while its job is unfinished';
+  end if;
+  if exists(select 1 from storage.objects where name='3cda2513-82f4-4b80-9918-41f42d8839fb/99000000-0000-4000-8000-000000000006/scene-01.mp4') then
+    raise exception 'Worker can read an expired scene after the job completed';
+  end if;
+end $$;
+reset role;
+update public.profiles p set role=saved.role, approved=saved.approved
+from retention_test_admin_restore saved where p.id=saved.id;
 
 do $$
 declare
@@ -101,10 +148,10 @@ begin
   if jsonb_array_length(retry_claim.scene_paths)<>1 or retry_claim.scene_paths->0->>'path'<>'e2f83e79-0133-4c73-9ddf-7ca7fac01b0d/99000000-0000-4000-8000-000000000001/scene-01.mp4' then
     raise exception 'Claim did not return the scene output path';
   end if;
-  if exists(select 1 from public.claim_expired_brand_outputs(20) where job_id in (retry_id,success_id,pending_id,legacy_id)) then
+  if exists(select 1 from public.claim_expired_brand_outputs(20) where job_id in (retry_id,success_id,pending_id,legacy_id,partial_id)) then
     raise exception 'A live claim was duplicated, or a pending/legacy job was selected';
   end if;
-  select * into partial_claim from public.claim_expired_brand_outputs(20) where job_id=partial_id;
+  select * into partial_claim from retention_test_claims where job_id=partial_id;
   if partial_claim.job_id is null or partial_claim.final_path is not null or partial_claim.reference_path is not null
     or jsonb_array_length(partial_claim.scene_paths)<>1
     or partial_claim.scene_paths->0->>'path'<>'3cda2513-82f4-4b80-9918-41f42d8839fb/99000000-0000-4000-8000-000000000006/scene-01.mp4' then
