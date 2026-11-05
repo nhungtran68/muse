@@ -60,7 +60,6 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
       let generation=Number(previous?.generation||0);
       const generationLimit=Math.floor(generation/3)*3+2;
       let receipt=previous?.request_receipt||null;
-      let timeouts=0;
       while(true){
         let video;
         try{
@@ -70,14 +69,8 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
             onBeforeSend:async nextReceipt=>{await updateScene(scene.index,{status:'generating',submission_state:'sending',request_receipt:nextReceipt});receipt=nextReceipt;}
           });
         }catch(error){
-          if(error?.code==='MUSE_TIMEOUT'&&receipt&&timeouts<2){
-            timeouts++;
-            console.warn(`Yêu cầu ${job.id} · đoạn ${scene.index} · lần chờ ${timeouts}/3 hết hạn; tiếp tục theo biên nhận cũ.`);
-            await new Promise(resolve=>setTimeout(resolve,retryDelayMs*timeouts));
-            continue;
-          }
           if(error?.code==='MUSE_TIMEOUT'&&receipt){
-            await updateScene(scene.index,{status:'error',error_code:'MUSE_TIMEOUT',error:`Đoạn ${scene.index}: chưa thấy kết quả sau ba lần kiểm tra; giữ biên nhận cũ để tiếp tục nhận, không gửi lại.`});
+            await updateScene(scene.index,{status:'error',error_code:'MUSE_TIMEOUT',error:`Đoạn ${scene.index}: ${String(error.message||'Muse chưa trả video đúng hạn.').slice(0,300)} Giữ biên nhận để tiếp tục nhận, không gửi trùng.`});
             throw error;
           }
           // Muse has explicitly said it will not deliver this clip. A new generation
@@ -142,5 +135,5 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
 
 export async function failBrandJobV2(job,error,{client,workerId,leaseToken}){
   const message=String(error?.message||'Không thể tạo video.').split('\n')[0].slice(0,400);
-  return rpc(client,'update_brand_job_v2',{p_id:job.id,p_worker:workerId,p_token:leaseToken,p_claim:job.claim_token,p_patch:{status:'error',error:message,error_code:error?.code||'WORKER_ERROR',retryable:error?.retryable!==false&&(job.attempt??0)<(job.max_attempts??3)}});
+  return rpc(client,'update_brand_job_v2',{p_id:job.id,p_worker:workerId,p_token:leaseToken,p_claim:job.claim_token,p_patch:{status:'error',error:message,error_code:error?.code||'WORKER_ERROR',retryable:error?.retryable!==false}});
 }
