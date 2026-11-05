@@ -81,6 +81,11 @@ export class MuseAdapter {
     console.log('Đang kiểm tra kết nối Muse; nếu cần, hãy đăng nhập trong cửa sổ Muse.');
     const until=Date.now()+timeoutMs;
     while(Date.now()<until){
+      if(p.isClosed())throw Object.assign(Error('Cửa sổ Muse đã đóng trong khi chờ đăng nhập.'),{code:'MUSE_BROWSER_CLOSED'});
+      // Authentication temporarily leaves muse.ai. Keep the same persistent
+      // profile open until its callback returns instead of aborting the login.
+      let onMuse=false;try{onMuse=new URL(p.url()).origin==='https://muse.ai';}catch{}
+      if(!onMuse){await new Promise(resolve=>setTimeout(resolve,500));continue;}
       await this.assertConnected();
       if(await this.composer().isVisible().catch(()=>false)){
         console.log(`Đã thấy ô chat Muse. URL: ${p.url()}`);return;

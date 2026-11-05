@@ -1,8 +1,9 @@
 @echo off
-title Muse Brand Worker V3
-cd /d "%~dp0"
-set "MUSE_ASR_BACKEND=docker"
-node worker-v2.mjs
-echo.
-echo Worker da dung. Hay xem thong bao o phia tren.
-pause
+chcp 65001 >nul
+set "MUSE_INSTALLED=%LOCALAPPDATA%\MuseBrandWorker\app\worker"
+if exist "%MUSE_INSTALLED%\supervisor.mjs" (
+  powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%MUSE_INSTALLED%\start-background.ps1"
+) else (
+  powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0install-windows.ps1" -Start
+  if errorlevel 1 pause
+)

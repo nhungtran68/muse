@@ -1,6 +1,5 @@
 import {randomUUID} from 'node:crypto';
 import path from 'node:path';
-import {fileURLToPath} from 'node:url';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {createClient} from '@supabase/supabase-js';
 import {adminLoginV2} from './login-v2.mjs';
@@ -11,19 +10,24 @@ import {checkMediaToolsAvailable} from './ffmpeg.mjs';
 import {failBrandJobV2,processBrandJobV2,processBrandScriptV3} from './workflow-v2.mjs';
 import {claimNextBrandJob} from './queue.mjs';
 import {LeaseGuard} from './lease-guard.mjs';
+import {runtimeDataDir,encryptedSessionStorage,acquireInstanceLock} from './runtime-state.mjs';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const workerVersion=JSON.parse(await readFile(new URL('./package.json',import.meta.url),'utf8')).version;
-const dataDir=path.join(path.dirname(fileURLToPath(import.meta.url)),'data'),downloadsDir=path.join(dataDir,'downloads');
-// Keep the admin session in memory for this process; do not reuse v1's token file.
-const supabase=createClient(supabaseUrl,publishableKey,{auth:{persistSession:false,autoRefreshToken:true,detectSessionInUrl:false}});
+const dataDir=runtimeDataDir(),downloadsDir=path.join(dataDir,'downloads');
+let releaseInstance;
+try{releaseInstance=await acquireInstanceLock(dataDir);}catch(error){console.log(error.message);process.exit(error.code==='WORKER_ALREADY_RUNNING'?2:1);}
+const supabase=createClient(supabaseUrl,publishableKey,{auth:{persistSession:true,storageKey:'muse-brand-worker-admin-v1',storage:encryptedSessionStorage(path.join(dataDir,'auth')),autoRefreshToken:true,detectSessionInUrl:false}});
 const muse=new MuseAdapterV2(path.join(dataDir,'muse-profile'),downloadsDir);
 const auditor=new SpeechAuditor({backend:process.env.MUSE_ASR_BACKEND||'native',container:process.env.MUSE_ASR_CONTAINER,modelRoot:process.env.MUSE_ASR_MODEL});
-const workerId=randomUUID(),leaseGuard=new LeaseGuard();let token=null,timer=null,safetyTimer=null,lost=false,renewing=false,currentState='starting';
+const workerId=randomUUID(),leaseGuard=new LeaseGuard();let token=null,timer=null,safetyTimer=null,lost=false,renewing=false,currentState='starting',requestedStop=false;
+async function requestStop(){requestedStop=true;lost=true;await muse.close().catch(()=>{});}
+process.on('SIGINT',()=>void requestStop());process.on('SIGTERM',()=>void requestStop());
+process.on('message',message=>{if(message==='shutdown')void requestStop();});
 async function startupStatus(state,error){
   currentState=state;
   await mkdir(dataDir,{recursive:true});
-  await writeFile(path.join(dataDir,'startup-status.json'),JSON.stringify({state,version:workerVersion,worker_id:workerId,time:new Date().toISOString(),...(error?{code:error.code||'STARTUP_ERROR',message:String(error.message||'').split('\n')[0].replace(/[A-Za-z0-9_-]{40,}/g,'[redacted]').slice(0,300)}:{})}));
+  await writeFile(path.join(dataDir,'startup-status.json'),JSON.stringify({state,version:workerVersion,pid:process.pid,worker_id:workerId,time:new Date().toISOString(),...(error?{code:error.code||'STARTUP_ERROR',message:String(error.message||'').split('\n')[0].replace(/[A-Za-z0-9_-]{40,}/g,'[redacted]').slice(0,300)}:{})}));
 }
 async function call(name,args){const result=await supabase.rpc(name,args);if(result.error)throw result.error;return result.data;}
 async function stopForLease(error){
@@ -49,12 +53,12 @@ async function renew(){
 }
 try{
   await startupStatus('checking_tools');await checkMediaToolsAvailable();await auditor.checkAvailable();
-  await startupStatus('waiting_admin_login');await adminLoginV2(supabase);
-  await startupStatus('waiting_muse_login');await muse.waitForLogin();
+  await startupStatus('waiting_admin_login');await adminLoginV2(supabase,{interactive:!process.argv.includes('--unattended')&&Boolean(process.stdin.isTTY)});
+  await startupStatus('waiting_muse_login');await muse.waitForLogin({timeoutMs:Number(process.env.MUSE_LOGIN_TIMEOUT_MS)||600000});
   if(process.argv.includes('--diagnose'))console.log('MUSE_CHECK_OK');
   else{
     await startupStatus('waiting_worker_lease');
-    while(!token){
+    while(!token&&!lost){
       const started=Date.now(),lease=await call('acquire_muse_worker',{p_worker:workerId});
       token=lease?.token||null;
       if(token&&!leaseGuard.confirm(started))throw Error('Nhận quyền worker quá chậm.');
@@ -67,6 +71,13 @@ try{
     await startupStatus('ready');
     console.log(`Worker đã sẵn sàng (bản ${workerVersion}). Giữ cửa sổ này và Muse mở.`);
     while(!lost){
+      // Reopen the same persistent profile before claiming customer work if
+      // Chrome was closed or the Muse session requires authentication again.
+      let composerReady=false;try{composerReady=await muse.composer().isVisible();}catch{}
+      if(!composerReady){
+        await startupStatus('waiting_muse_login');await muse.waitForLogin();
+        if(lost)break;await startupStatus('ready');
+      }else await muse.assertConnected();
       // A failed claim may have succeeded remotely. Never blindly resubmit it.
       const job=await claimNextBrandJob(call,{p_worker:workerId,p_token:token});
       if(lost)break;
@@ -82,11 +93,13 @@ try{
       }
     }
   }
-}catch(error){await startupStatus('error',error).catch(()=>{});console.error('Không chạy được worker:',error.message);process.exitCode=1;}
+}catch(error){if(requestedStop)await startupStatus('stopped').catch(()=>{});else{await startupStatus('error',error).catch(()=>{});console.error('Không chạy được worker:',error.message);process.exitCode=1;}}
 finally{
   if(timer)clearInterval(timer);
   if(safetyTimer)clearInterval(safetyTimer);
-  if(token&&!lost)await call('release_muse_worker',{p_worker:workerId,p_token:token}).catch(()=>{});
+  if(token)await call('release_muse_worker',{p_worker:workerId,p_token:token}).catch(()=>{});
   await muse.close().catch(()=>{});supabase.auth.stopAutoRefresh();
   if(currentState!=='error')await startupStatus('stopped').catch(()=>{});
+  await releaseInstance();
+  if(process.connected)process.disconnect();
 }
