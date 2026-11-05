@@ -128,6 +128,7 @@ test('a saved request prevents a missing conversation from submitting the scene 
 
 test('stops promptly when Muse disconnects the account, before any scene is sent',async t=>{
   const {adapter}=await fixture(t,'<h1>Đã ngắt kết nối Muse</h1><p>Chúng tôi đã ngắt kết nối Muse để bảo vệ thông tin của bạn.</p>');
+  adapter.page.url=()=> 'https://muse.ai/';
   adapter.open=async()=>adapter.page;
   const start=Date.now();
   await assert.rejects(()=>adapter.waitForLogin({timeoutMs:30000}),error=>error.code==='MUSE_DISCONNECTED');
