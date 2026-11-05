@@ -1,4 +1,4 @@
-# Muse Brand Worker 3.0.6
+# Muse Brand Worker 3.0.7
 
 Worker chạy trên máy quản trị viên và dùng phiên Muse trong hồ sơ Chrome riêng. Sau khi đăng nhập Windows, bộ giám sát tự mở Docker Desktop, chờ `fb-whisper`, khởi động Worker và mở lại Muse. Nếu Docker hoặc Whisper ngừng, bộ giám sát chờ và khôi phục trước khi Worker nhận tác vụ.
 
@@ -9,5 +9,7 @@ Worker chạy trên máy quản trị viên và dùng phiên Muse trong hồ sơ
 3. Dùng `02-CHAY-WORKER.cmd` nếu muốn chạy lại ngay mà không khởi động lại máy. Kiểm tra `startup-status.json` trong `%LOCALAPPDATA%\MuseBrandWorker`; trạng thái `ready` nghĩa là Worker đã nhận quyền và Muse đang sẵn sàng. Nhật ký ở `%LOCALAPPDATA%\MuseBrandWorker\logs\worker.log`.
 4. Trên web, quản trị viên bật **Nhận yêu cầu mới**. Thành viên tải một ảnh, nhập bản thô và chọn số đoạn 10 giây. Muse tự phát triển ý ngắn hoặc cô đọng ý dài, giữ thông điệp chính và không tự bịa dữ kiện.
 5. Worker viết kịch bản rồi dừng. Thành viên sửa lời thoại; chỉ nút **Tạo video** mới đưa clip vào hàng đợi. Worker dùng cùng ảnh gốc cho từng clip, kiểm tra tiếng nói và thời lượng, ghép theo thứ tự, rồi trả MP4 vào tài khoản của đúng thành viên.
+
+V3.0.7: nếu Muse quá thời hạn cho một clip, Worker ghi trạng thái lỗi, giữ biên nhận để tiếp tục lấy đúng clip đó và nhận job tiếp theo. Không tự gửi lại một yêu cầu có kết quả chưa rõ. Nếu máy chủ tạm thời không nhận được cập nhật lỗi sau ba lần thử, Worker nhả quyền xử lý để tác vụ treo được hệ thống phục hồi. Nút **Tạo lại video** trên web tiếp tục đúng job, giữ các clip đã hoàn tất.
 
 Phiên quản trị được mã hóa bằng Windows DPAPI cho riêng người dùng Windows hiện tại; hồ sơ Chrome Muse được lưu tại `%LOCALAPPDATA%\MuseBrandWorker\muse-profile`. Không gửi hai thư mục này cho người khác. Nếu Muse hủy phiên hoặc yêu cầu xác minh lại, cần đăng nhập lại trong Chrome; phần mềm không thể tự vượt qua xác minh của Muse. Tự chạy bắt đầu sau khi người dùng đăng nhập Windows. Trong v3, Muse tạo từng clip 10 giây; prompt yêu cầu giữ mặt và giọng nhưng Muse không có điều khiển khóa danh tính/giọng được kiểm chứng. Kiểm tra thành phẩm trước khi dùng công khai.
