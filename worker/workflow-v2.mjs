@@ -69,6 +69,10 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
             onBeforeSend:async nextReceipt=>{await updateScene(scene.index,{status:'generating',submission_state:'sending',request_receipt:nextReceipt});receipt=nextReceipt;}
           });
         }catch(error){
+          if(error?.code==='SUBMISSION_NOT_FOUND'){
+            await updateScene(scene.index,{status:'error',error_code:error.code,error:String(error.message||'Muse chưa hiển thị yêu cầu đã gửi.').slice(0,400)});
+            error.retryable=true;
+          }
           if(error?.code==='MUSE_TIMEOUT'&&receipt){
             await updateScene(scene.index,{status:'error',error_code:'MUSE_TIMEOUT',error:`Đoạn ${scene.index}: ${String(error.message||'Muse chưa trả video đúng hạn.').slice(0,300)} Giữ biên nhận để tiếp tục nhận, không gửi trùng.`});
             throw error;
