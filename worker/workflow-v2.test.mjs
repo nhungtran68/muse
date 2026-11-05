@@ -204,6 +204,44 @@ test('a verified bad scene is automatically retried without resending the old re
   assert.equal(patches.at(-1).status,'done');
 });
 
+test('single-request videos send once, skip storyboarding, and return one finished file',async t=>{
+  const root=await mkdtemp(path.join(tmpdir(),'muse-single-video-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const video=path.join(root,'one-video.mp4');await clip(video,'blue',10);
+  const image=Buffer.alloc(128,7);image.set([137,80,78,71,13,10,26,10]);
+  const scene={index:1,seconds:10,prompt:'Giới thiệu khu vườn bằng hình ảnh ấm áp.',dialogue:'',action:'single_request',source_quotes:[]};
+  const job={id:randomUUID(),user_id:randomUUID(),claim_token:randomUUID(),schema_version:2,status:'planning',
+    reference_path:'owner/reference',reference_sha256:hash(image),scene_count:1,scene_seconds:10,content:scene.prompt,plan:[scene]};
+  const scenes=new Map([[job.id,[{scene_index:1,status:'waiting',generation:0,request_receipt:null}]]]);
+  const client=fakeClient([job],[image],scenes);let videoRequests=0;
+  const muse={async beginJob(){return {url:'https://muse.ai/thread/single'};},async storyboard(){assert.fail('A single request must not create a separate storyboard request.');},
+    async generateSceneV2(_job,part,_image,{onBeforeSend,onSubmitted}){videoRequests++;assert.equal(part.action,'single_request');
+      await onBeforeSend({key:'single-request-0'});await onSubmitted();return {path:video};}};
+  const result=await processBrandJobV2(job,{client,muse,workRoot:root,workerId:randomUUID(),leaseToken:randomUUID()});
+  assert.equal(videoRequests,1);
+  assert.ok(client.objects.has('brand-videos/'+result));
+  const saved=client.sceneData.get(job.id)[0];assert.equal(saved.status,'done');
+  assert.equal(saved.submission_state,'downloaded');assert.equal(saved.request_receipt.key,'single-request-0');
+  const finalPatch=client.patches.find(p=>p.name==='update_brand_job_v2'&&p.args.p_patch.status==='done');
+  assert.equal(finalPatch.args.p_patch.final_probe.speech_audit.verification,'not_requested');
+});
+
+test('a failed single-request video stops after one send and exposes a safe manual retry',async t=>{
+  const root=await mkdtemp(path.join(tmpdir(),'muse-single-video-error-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const image=Buffer.alloc(128,8);image.set([137,80,78,71,13,10,26,10]);
+  const scene={index:1,seconds:10,prompt:'Tạo một video giới thiệu khu vườn.',dialogue:'',action:'single_request',source_quotes:[]};
+  const job={id:randomUUID(),user_id:randomUUID(),claim_token:randomUUID(),schema_version:2,status:'planning',
+    reference_path:'owner/reference',reference_sha256:hash(image),scene_count:1,scene_seconds:10,content:scene.prompt,plan:[scene]};
+  const scenes=new Map([[job.id,[{scene_index:1,status:'waiting',generation:0,request_receipt:null}]]]);
+  const client=fakeClient([job],[image],scenes);let videoRequests=0;
+  const muse={async beginJob(){return {url:'https://muse.ai/thread/single'};},async generateSceneV2(_job,_scene,_image,{onBeforeSend}){
+    videoRequests++;await onBeforeSend({key:'known-refusal'});throw Object.assign(Error('Muse đã từ chối video.'),{code:'MUSE_OUTPUT_REJECTED'});
+  }};
+  await assert.rejects(processBrandJobV2(job,{client,muse,workRoot:root,workerId:randomUUID(),leaseToken:randomUUID()}),{code:'MUSE_OUTPUT_REJECTED',retryable:true});
+  assert.equal(videoRequests,1);
+  const saved=client.sceneData.get(job.id)[0];assert.equal(saved.status,'error');
+  assert.equal(saved.submission_state,'not_sent');assert.equal(saved.request_receipt,null);
+});
+
 test('explicit Muse refusal retries a fresh generation with unchanged approved dialogue and original image',async t=>{
   const root=await mkdtemp(path.join(tmpdir(),'muse-v3-rejected-'));t.after(()=>rm(root,{recursive:true,force:true}));
   const video=path.join(root,'accepted.mp4');await clip(video,'green',10);

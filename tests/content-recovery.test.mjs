@@ -52,11 +52,11 @@ test('content errors restore only the owner input and image; a delayed restore c
  async function login(email){await page.locator('#auth-email').fill(email);await page.locator('#auth-password').fill('local-test-password-123');await page.locator('#auth-form button[type=submit]').click();await page.locator('#create-form').waitFor({timeout:20000});}
  await page.goto(`http://127.0.0.1:${port}`);await login('one@example.test');
  await page.locator('.edit-input').waitFor();assert.equal(await page.locator('.retry-job').count(),0);
- await page.locator('#scene-count').selectOption('1');await page.locator('.edit-input').click();
+ assert.equal(await page.locator('#scene-count').count(),0,'single-request home does not expose scene planning');
+ await page.locator('.edit-input').click();
  await page.waitForFunction(()=>document.querySelector('#reference').files.length===1);
  assert.equal(await page.locator('#content').inputValue(),content);
- assert.equal(await page.locator('#scene-count').inputValue(),'3');
- assert.match(await page.locator('#content-guidance').innerText(),/phát triển ý tưởng ngắn/);
+ assert.match(await page.locator('.mode-note').innerText(),/Một video · 10 giây/);
  const restored=await page.locator('#reference').evaluate(async el=>Array.from(new Uint8Array(await el.files[0].arrayBuffer())));
  assert.deepEqual(Buffer.from(restored),image);
  let release;delay=new Promise(resolve=>{release=resolve;});const started=new Promise(resolve=>{downloadStarted=resolve;});

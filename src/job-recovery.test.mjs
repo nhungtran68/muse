@@ -30,3 +30,11 @@ test('unrelated uncertain submissions do not offer automatic recovery',()=>{
   const job={status:'error',error_code:'UNCERTAIN_SUBMISSION',error:'Biên nhận cảnh không khớp lần tạo.',brand_scenes:[scene]};
   assert.equal(hasUncertainSubmission(job),false);
 });
+
+test('a timed-out submitted request remains resumable only while its receipt exists',()=>{
+  const submitted={status:'error',error_code:'MUSE_TIMEOUT',brand_scenes:[{...scene,status:'error',submission_state:'sent'}]};
+  assert.equal(hasUncertainSubmission(submitted),true);
+  assert.equal(visibleSceneStatus(submitted,submitted.brand_scenes[0]),'error');
+  submitted.brand_scenes[0].request_receipt=null;
+  assert.equal(hasUncertainSubmission(submitted),false);
+});

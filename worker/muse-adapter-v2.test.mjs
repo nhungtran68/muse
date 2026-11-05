@@ -97,6 +97,23 @@ test('a saved receipt missing from chat is recoverable by polling only and never
     error.code==='SUBMISSION_NOT_FOUND'&&error.retryable===true&&error.message.includes('không gửi lại'));
 });
 
+test('a new single video request persists the Muse receipt before sending and marks it sent after acknowledgement',async()=>{
+  const {adapter,page}=fixture(),job={id:'12345678-1234-1234-1234-123456789abc',schema_version:2,scene_seconds:10,content:'Kể về khu vườn vào buổi sớm.'};
+  const scene={index:1,seconds:10,prompt:job.content,dialogue:'',action:'single_request'};
+  let draft='',sent=0,beforeSend=0,submitted=0,responseReads=0;
+  const input={async fill(value){draft=value;},async inputValue(){return draft;},async press(key){assert.equal(key,'Enter');sent++;}};
+  adapter.cleanComposer=async()=>input;adapter.attachReference=async path=>assert.equal(path,'reference.png');
+  adapter.sceneResponse=async()=>++responseReads===1?{requested:false,video:null}:{requested:true,video:{click:async()=>{},dispose:async()=>{}}};
+  adapter.assertConnected=async()=>{};adapter.downloadScene=async()=>({path:'single.mp4'});adapter.pollMs=1;adapter.sceneTimeoutMs=1000;
+  const result=await adapter.generateSceneV2(job,scene,'reference.png',{
+    onBeforeSend:async receipt=>{beforeSend++;assert.ok(receipt.key.includes('SCENE_1_GEN_0'));},
+    onSubmitted:async()=>{submitted++;}
+  });
+  assert.equal(result.path,'single.mp4');assert.equal(beforeSend,1);assert.equal(sent,1);assert.equal(submitted,1);
+  assert.match(draft,/đúng một video dài 10 giây/);assert.match(draft,/không chia thành nhiều video/);
+  assert.equal(page.url(),'https://muse.ai/thread/12345678-1234-1234-1234-123456789abc');
+});
+
 test('reports the scoped assistant refusal and never resends a recorded scene',async()=>{
   const {adapter}=fixture(),job={id:'12345678-1234-1234-1234-123456789abc',scene_seconds:10};
   const receipt={key:'BRAND_12345678_1234_1234_1234_123456789abc_SCENE_1_GEN_0'};
