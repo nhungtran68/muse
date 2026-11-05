@@ -2,6 +2,7 @@ import {createClient} from '@supabase/supabase-js';
 import {adminEmail, supabaseKey, supabaseUrl} from './config.js';
 import {storyboardInput} from '../shared/storyboard.mjs';
 import {validateEditedDialogue} from '../shared/brand-video-prompt.mjs';
+import {normalizeReferenceImage} from './image-normalization.mjs';
 import './styles.css';
 import './brand-script.css';
 
@@ -11,6 +12,8 @@ const safe = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&am
 const shortDate = value => new Intl.DateTimeFormat('vi-VN',{dateStyle:'short',timeStyle:'short'}).format(new Date(value));
 const labels = {uploading:'Đang tải ảnh',queued:'Đang xếp hàng',planning:'AI chia cảnh',generating:'Đang tạo cảnh',joining:'Đang ghép',done:'Hoàn tất',needs_review:'Cần kiểm tra',reviewed:'Đã kiểm tra'};
 let session = null, profile = null, settings = null, modes = [], poller = null, previewUrl = null, jobsSignature = '', appEpoch = 0, jobsRefreshVersion = 0, sceneRetryAvailable = null, jobsVisibleCount = 3, jobsTotalCount = 0, retentionClock = null;
+let preparedReference=null,referenceNormalizationSequence=0;
+const retryingJobs=new Set(),retryingScenes=new Set();
 const retentionExpiredRefreshes=new Set();
 
 function message(text, type='info') {
@@ -65,6 +68,7 @@ function renderModule() {
     on('#claim-form','submit',async event=>{event.preventDefault();const code=document.querySelector('#claim-code').value.trim();const {error}=await supabase.rpc('claim_admin',{setup_code:code});if(error)return message(error.message,'error');await loadApp();});
     return;
   }
+  preparedReference=null;referenceNormalizationSequence++;
   section.innerHTML=`<div class="section-head module-head"><div><p class="eyebrow">CÔNG CỤ 01</p><h2>Tạo thương hiệu</h2><p>Một ảnh nhất quán. Nhiều cảnh, một câu chuyện.</p></div><span class="step-badge">01 — ${String(settings.max_scenes).padStart(2,'0')} CẢNH</span></div><div class="creator-layout"><form id="create-form" class="creator-form"><div class="form-header"><span class="form-index">01</span><div><h3>Thiết lập video</h3><p>AI Muse sẽ phân tích ý tưởng và lập từng cảnh trước khi tạo.</p></div></div><label class="field-label" for="reference">Ảnh tham chiếu <span>Bắt buộc</span></label><label class="upload-zone" for="reference"><input id="reference" type="file" accept="image/png,image/jpeg,image/webp" required><span class="upload-symbol">↥</span><strong id="file-name">Chọn hoặc kéo ảnh vào đây</strong><small>JPG, PNG hoặc WebP · tối đa 10 MB</small><img id="image-preview" alt="Ảnh tham chiếu đã chọn" hidden></label><label class="field-label" for="content">Nội dung thương hiệu <span>Bắt buộc</span></label><textarea id="content" rows="6" minlength="10" maxlength="4000" required placeholder="Ví dụ: Giới thiệu sản phẩm cà phê rang mộc. Tông màu ấm, nhịp kể chậm, thể hiện quy trình từ hạt đến tách cà phê."></textarea><div class="form-row"><label class="field-label" for="scene-count">Số cảnh muốn tạo<select id="scene-count">${Array.from({length:settings.max_scenes},(_,i)=>`<option value="${i+1}" ${i+1===Math.min(3,settings.max_scenes)?'selected':''}>${i+1} cảnh</option>`).join('')}</select></label><div class="duration-box"><span>Thời lượng mỗi cảnh</span><strong>${settings.scene_seconds} giây</strong><small>Quản trị viên cài đặt</small></div></div><p class="consent"><span aria-hidden="true">ⓘ</span> Ảnh và mô tả được gửi qua tài khoản Muse của đơn vị vận hành. Nội dung có thể nằm trong lịch sử Muse.</p><button class="primary create-button" type="submit" ${settings.enabled?'':'disabled'}>Tạo video thương hiệu <span>↗</span></button>${settings.enabled?'':'<p class="inline-warning">Quản trị viên đang tạm dừng nhận yêu cầu.</p>'}</form><aside class="flow-panel"><p class="eyebrow">QUY TRÌNH TỰ ĐỘNG</p><h3>Từ ý tưởng đến<br><em>video hoàn chỉnh.</em></h3><ol><li><span>01</span><div><strong>Phân tích</strong><p>Muse chia nội dung thành các cảnh liên tục.</p></div></li><li><span>02</span><div><strong>Tạo từng cảnh</strong><p>Cùng ảnh tham chiếu, 9:16, ${settings.scene_seconds} giây mỗi cảnh.</p></div></li><li><span>03</span><div><strong>Ghép video</strong><p>Các cảnh được nối thành một file MP4.</p></div></li></ol><div class="flow-foot">Mỗi tài khoản tối đa ${settings.daily_limit} yêu cầu/ngày</div></aside></div>`;
   const duration=section.querySelector('.duration-box');
   duration.innerHTML='<label for="scene-duration">Mỗi đoạn nói</label><select id="scene-duration" aria-label="Thời lượng cố định"><option value="10">10 giây</option></select><small id="total-duration"></small>';
@@ -100,11 +104,28 @@ function renderModule() {
   updateGuidance();
   const memberCode=document.createElement('p');memberCode.className='muted';memberCode.textContent=`Mã thành viên: ${session.user.id}`;
   section.querySelector('.form-header').after(memberCode);
-  on('#reference','change',()=>{
-    const file=document.querySelector('#reference').files[0];if(previewUrl)URL.revokeObjectURL(previewUrl);
-    const image=document.querySelector('#image-preview');
-    if(file){previewUrl=URL.createObjectURL(file);image.src=previewUrl;image.hidden=false;document.querySelector('#file-name').textContent=file.name;}
-    else {image.hidden=true;document.querySelector('#file-name').textContent='Chọn hoặc kéo ảnh vào đây';}
+  const referenceInput=section.querySelector('#reference'),uploadZone=section.querySelector('.upload-zone');
+  const imageStatus=document.createElement('small');imageStatus.id='image-processing-status';imageStatus.className='image-processing-status';imageStatus.setAttribute('role','status');imageStatus.setAttribute('aria-live','polite');uploadZone.append(imageStatus);
+  const createButton=section.querySelector('.create-button');
+  const syncCreateButton=()=>{createButton.disabled=!settings.enabled||!modes.some(mode=>mode.seconds===10)||!preparedReference;};
+  referenceInput.addEventListener('change',async()=>{
+    const sequence=++referenceNormalizationSequence,file=referenceInput.files[0],image=section.querySelector('#image-preview');
+    preparedReference=null;syncCreateButton();
+    if(previewUrl){URL.revokeObjectURL(previewUrl);previewUrl=null;}
+    if(!file){image.hidden=true;image.removeAttribute('src');section.querySelector('#file-name').textContent='Chọn hoặc kéo ảnh vào đây';imageStatus.textContent='';imageStatus.dataset.state='';return;}
+    image.hidden=true;image.removeAttribute('src');section.querySelector('#file-name').textContent=file.name;imageStatus.textContent='Đang chuẩn hóa ảnh theo khung dọc 9:16…';imageStatus.dataset.state='working';
+    try{
+      const result=await normalizeReferenceImage(file);
+      if(sequence!==referenceNormalizationSequence)return;
+      preparedReference=result.file;previewUrl=URL.createObjectURL(result.file);image.src=previewUrl;image.hidden=false;
+      section.querySelector('#file-name').textContent=`${file.name} · đã chuẩn hóa 9:16`;
+      imageStatus.textContent=result.padded?`Đã xử lý thành ảnh 720 × 1280. Giữ nguyên tỷ lệ, thêm phần đệm để không cắt mất nội dung.`:`Đã xử lý thành ảnh 720 × 1280 (9:16), không kéo méo ảnh.`;
+      imageStatus.dataset.state='ready';
+    }catch(error){
+      if(sequence!==referenceNormalizationSequence)return;
+      imageStatus.textContent=error.message||'Không xử lý được ảnh. Hãy lưu lại ảnh dưới dạng JPG, PNG hoặc WebP rồi thử lại.';
+      imageStatus.dataset.state='error';
+    }finally{if(sequence===referenceNormalizationSequence)syncCreateButton();}
   });
   on('#create-form','submit',submitBrand);
 }
@@ -118,8 +139,9 @@ async function submitBrand(event) {
   const userId=session?.user.id;
   if(!userId)return;
   const submitClient=createClient(supabaseUrl,supabaseKey,{global:{headers:{Authorization:'Bearer '+session.access_token}},auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
-  const file=document.querySelector('#reference').files[0];
-  if(!file||!['image/jpeg','image/png','image/webp'].includes(file.type)||file.size>10*1024*1024)return message('Chọn ảnh JPG, PNG hoặc WebP dưới 10 MB.','error');
+  const selectedFile=document.querySelector('#reference').files[0],file=preparedReference;
+  if(selectedFile&&!file)return message(document.querySelector('#image-processing-status')?.textContent||'Ảnh đang được xử lý. Hãy chờ hoàn tất rồi thử lại.','error');
+  if(!file)return message('Chọn ảnh JPG, PNG hoặc WebP để tiếp tục.','error');
   const content=document.querySelector('#content').value.trim(),sceneCount=Number(document.querySelector('#scene-count').value),seconds=10;
   // The owner explicitly authorized automatic editing of long raw input:
   // retain the main message and condense only secondary/repeated details.
@@ -144,10 +166,14 @@ async function submitBrand(event) {
     localStorage.removeItem(storageKey);
     if(session?.user.id!==userId)return;
     message('Đã nhận yêu cầu tạo kịch bản. Chưa bắt đầu tạo video.','success');
-    document.querySelector('#create-form').reset();document.querySelector('#content').dispatchEvent(new Event('input'));document.querySelector('#image-preview').hidden=true;document.querySelector('#file-name').textContent='Chọn hoặc kéo ảnh vào đây';
+    document.querySelector('#create-form').reset();document.querySelector('#content').dispatchEvent(new Event('input'));
+    preparedReference=null;referenceNormalizationSequence++;if(previewUrl){URL.revokeObjectURL(previewUrl);previewUrl=null;}
+    document.querySelector('#image-preview').hidden=true;document.querySelector('#image-preview').removeAttribute('src');document.querySelector('#file-name').textContent='Chọn hoặc kéo ảnh vào đây';
+    const imageStatus=document.querySelector('#image-processing-status');if(imageStatus){imageStatus.textContent='';imageStatus.dataset.state='';}
+    const createButton=document.querySelector('.create-button');if(createButton)createButton.disabled=!settings?.enabled||!modes.some(mode=>mode.seconds===10)||!preparedReference;
     await refreshJobs();document.querySelector('#jobs').scrollIntoView({behavior:'smooth'});
   }catch(error){if(session?.user.id===userId)message(error.message||'Không gửi được yêu cầu. Hãy thử lại.','error');}
-  finally{if(button.isConnected){button.disabled=!settings?.enabled||!modes.some(mode=>mode.seconds===10);button.textContent='Tạo kịch bản';}}
+  finally{if(button.isConnected){button.disabled=!settings?.enabled||!modes.some(mode=>mode.seconds===10)||!preparedReference;button.textContent='Tạo kịch bản';}}
 }
 
 function renderJobs() {
@@ -346,7 +372,7 @@ async function refreshJobs({force=false}={}) {
     const scriptNeedsRetry=job.status==='error'&&job.schema_version===3&&job.workflow_phase==='script'&&!job.plan?.length;
     const displayError=job.error_code==='CONTENT_TOO_LONG'?'Muse chưa cô đọng được bản thô ở lượt trước. Hãy tạo lại kịch bản; Muse sẽ tự giữ ý chính và lược chi tiết phụ.':job.error;
     const finalActions=canDownloadFinal(job)?`<button class="outline view-video" data-path="${safe(job.final_path)}" data-id="${safe(job.id)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(job.output_expires_at||'')}">Xem video</button><button class="primary download-final" data-path="${safe(job.final_path)}" data-id="${safe(job.id)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(job.output_expires_at||'')}">Tải xuống</button>`:'';
-    const otherAction=job.status==='uploading'?`<label class="outline">Chọn lại ảnh<input class="resume-file" type="file" accept="image/png,image/jpeg,image/webp" data-id="${safe(job.id)}"></label>`:job.status==='error'&&job.retryable&&job.attempt<job.max_attempts?`<button class="outline retry-job" data-id="${safe(job.id)}">Thử lại</button>`:'';
+    const otherAction=job.status==='uploading'?`<label class="outline">Chọn lại ảnh<input class="resume-file" type="file" accept="image/png,image/jpeg,image/webp" data-id="${safe(job.id)}"></label>`:job.status==='error'&&job.retryable?`<button class="outline retry-job" type="button" data-id="${safe(job.id)}">${job.workflow_phase==='script'?'Tạo lại kịch bản':'Tạo lại video'}</button>`:'';
     return `<article class="job-card" data-job-id="${safe(job.id)}"><div class="job-main"><div class="job-top"><span>${shortDate(job.created_at)}</span><span class="status status-${safe(job.status)}">${safe(scriptNeedsRetry?'Cần tạo lại kịch bản':status[job.status]||job.status)}</span></div><div class="job-heading"><img class="job-thumbnail" alt="Ảnh tham chiếu" hidden><h3>${safe(job.content.slice(0,110))}</h3></div><p>${job.scene_count} ${job.schema_version===3?'đoạn':'cảnh'} · ${job.scene_seconds} giây/${job.schema_version===3?'đoạn':'cảnh'} · tổng ${job.scene_count*job.scene_seconds} giây</p><small>Mã yêu cầu: ${safe(job.id)}</small>${displayError?`<p class="job-error">${safe(displayError)}</p>`:''}${retentionMarkup(job)}${scriptNeedsRetry?'<p class="inline-warning">Chưa có kịch bản nên chưa thể tạo video. Sửa số đoạn nếu cần, rồi gửi lại bước “Tạo kịch bản”. Muse sẽ tự xử lý độ dài của bản thô.</p>':`<div class="scene-track">${Array.from({length:job.scene_count},(_,i)=>{const scene=job.brand_scenes?.find(x=>x.scene_index===i+1);return `<span class="scene-pill ${safe(scene?.status||'waiting')}">${String(i+1).padStart(2,'0')}</span>`;}).join('')}</div>`}${job.brand_scenes?.length?`<details><summary>Lời thoại từng đoạn</summary>${job.brand_scenes.sort((a,b)=>a.scene_index-b.scene_index).map(scene=>`<p><strong>Đoạn ${scene.scene_index} · ${scene.planned_seconds||job.scene_seconds} giây</strong><br>Lời thoại: ${safe(scene.dialogue||'Không có')}</p>`).join('')}</details>`:''}</div><div class="job-action">${finalActions}${otherAction}</div><div class="video-slot" id="video-${safe(job.id)}"></div></article>`;
   }).join('');
   result.data.forEach(async(job,index)=>{
@@ -368,9 +394,9 @@ async function refreshJobs({force=false}={}) {
       const sceneExpiry=scene?.output_expires_at||'';
       const sceneRemaining=sceneExpiry?Date.parse(sceneExpiry)-Date.now():null;
       const sceneTimer=sceneExpiry?`<small class="scene-expiry">Còn: <span class="scene-expiry-timer" data-expiry="${safe(sceneExpiry)}">${sceneRemaining>0?formatRemaining(sceneRemaining):'đang chờ máy chủ xác nhận xóa'}</span></small>`:'';
-      const canResume=state==='error'&&job.status==='error'&&job.retryable&&job.attempt<job.max_attempts;
+      const canResume=state==='error'&&job.status==='error'&&job.retryable;
       const canRestart=sceneRetryAvailable&&state==='error'&&job.status==='error'&&job.schema_version===3&&!canResume&&['MUSE_OUTPUT_REJECTED','SCENE_MEDIA_INVALID','CUT_OFF_SPEECH','SPEECH_TOO_SHORT','SPEECH_TIMING','SPEECH_MISMATCH','UNEXPECTED_SPEECH'].includes(scene?.error_code);
-      return `<div class="scene-row"><span class="scene-pill ${safe(state)}">${String(index+1).padStart(2,'0')}</span><span>Đoạn ${index+1}/${job.scene_count}: <strong>${safe(labels[state]||state)}</strong>${state==='generating'?` · lần ${Number(scene?.generation||0)%3+1}/3`:''}${scene?.error&&state==='error'?`<small class="job-error">${safe(scene.error)}</small>`:''}${state==='done'?sceneTimer:''}</span>${state==='done'&&scene.output_path&&mediaStillAvailable(job.retention_status,scene.output_expires_at)?`<button class="outline view-video view-scene" type="button" data-path="${safe(scene.output_path)}" data-id="${safe(job.id)}" data-scene="${index+1}" data-slot="${safe(slotId)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(scene.output_expires_at||'')}">Xem đoạn</button>`:canResume?`<button class="outline retry-job" type="button" data-id="${safe(job.id)}">Tiếp tục từ đoạn ${index+1}</button>`:canRestart?`<button class="outline retry-scene" type="button" data-id="${safe(job.id)}" data-scene="${index+1}">Tạo lại đoạn ${index+1}</button>`:''}<div class="video-slot" id="${safe(slotId)}"></div></div>`;
+      return `<div class="scene-row"><span class="scene-pill ${safe(state)}">${String(index+1).padStart(2,'0')}</span><span>Đoạn ${index+1}/${job.scene_count}: <strong>${safe(labels[state]||state)}</strong>${state==='generating'?` · lần ${Number(scene?.generation||0)%3+1}/3`:''}${scene?.error&&state==='error'?`<small class="job-error">${safe(scene.error)}</small>`:''}${state==='done'?sceneTimer:''}</span>${state==='done'&&scene.output_path&&mediaStillAvailable(job.retention_status,scene.output_expires_at)?`<button class="outline view-video view-scene" type="button" data-path="${safe(scene.output_path)}" data-id="${safe(job.id)}" data-scene="${index+1}" data-slot="${safe(slotId)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(scene.output_expires_at||'')}">Xem đoạn</button>`:canResume?`<button class="outline retry-job" type="button" data-id="${safe(job.id)}">Tạo lại / tiếp tục đoạn ${index+1}</button>`:canRestart?`<button class="outline retry-scene" type="button" data-id="${safe(job.id)}" data-scene="${index+1}">Tạo lại đoạn ${index+1}</button>`:''}<div class="video-slot" id="${safe(slotId)}"></div></div>`;
     }).join('');
   });
   for(const [id,slot] of openMedia){
@@ -418,12 +444,22 @@ async function refreshJobs({force=false}={}) {
       message('Đã đưa yêu cầu vào hàng chờ.','success');await refreshJobs();
     }catch(error){message(error.message,'error');input.disabled=false;}
   }));
-  list.querySelectorAll('.retry-job').forEach(button=>button.addEventListener('click',async()=>{button.disabled=true;const result=await supabase.rpc('retry_brand_job',{p_id:button.dataset.id});if(result.error)message(result.error.message,'error');await refreshJobs();button.disabled=false;}));
+  list.querySelectorAll('.retry-job').forEach(button=>button.addEventListener('click',async()=>{
+    const id=button.dataset.id;if(retryingJobs.has(id))return;retryingJobs.add(id);
+    list.querySelectorAll('.retry-job').forEach(item=>{if(item.dataset.id===id)item.disabled=true;});
+    try{
+      const result=await supabase.rpc('retry_brand_job',{p_id:id});if(result.error)throw result.error;
+      message('Đã xếp lại đúng tác vụ lỗi. Các đoạn đã hoàn thành được giữ nguyên.','success');
+    }catch(error){message(error.message||'Không thể xếp lại tác vụ. Hãy tải lại trạng thái rồi thử lại.','error');}
+    finally{retryingJobs.delete(id);if(session?.user.id===userId)await refreshJobs({force:true});if(button.isConnected)button.disabled=false;}
+  }));
   list.querySelectorAll('.retry-scene').forEach(button=>button.addEventListener('click',async()=>{
-    button.disabled=true;
-    const result=await supabase.rpc('retry_brand_scene_v3',{p_id:button.dataset.id,p_scene:Number(button.dataset.scene)});
-    if(result.error)message(result.error.message,'error');else message(`Đã xếp lại đoạn ${button.dataset.scene}; các đoạn hoàn tất được giữ nguyên.`,'success');
-    await refreshJobs({force:true});if(button.isConnected)button.disabled=false;
+    const id=button.dataset.id,scene=Number(button.dataset.scene),key=`${id}:${scene}`;if(retryingScenes.has(key))return;retryingScenes.add(key);button.disabled=true;
+    try{
+      const result=await supabase.rpc('retry_brand_scene_v3',{p_id:id,p_scene:scene});if(result.error)throw result.error;
+      message(`Đã xếp lại đoạn ${scene}; các đoạn hoàn tất được giữ nguyên.`,'success');
+    }catch(error){message(error.message||'Không thể xếp lại đoạn video. Hãy tải lại trạng thái rồi thử lại.','error');}
+    finally{retryingScenes.delete(key);if(session?.user.id===userId)await refreshJobs({force:true});if(button.isConnected)button.disabled=false;}
   }));
   list.querySelectorAll('.download-final').forEach(button=>button.addEventListener('click',()=>downloadStoredVideo({path:button.dataset.path,id:button.dataset.id,button,userId,retentionStatus:button.dataset.retention,expiresAt:button.dataset.expiry||null})));
   list.querySelectorAll('.view-video').forEach(button=>button.addEventListener('click',async()=>{

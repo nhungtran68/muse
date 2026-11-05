@@ -45,7 +45,10 @@ test('browser separates script creation, editing, count change and explicit vide
    job={id,user_id:owner,content:args.p_content,scene_count:args.p_scene_count,scene_seconds:10,status:'uploading',schema_version:3,workflow_phase:'script',reference_path:`${owner}/${id}/reference`,script_revision:0,plan:[],created_at:new Date().toISOString()};
    return route.fulfill(json(job));
   }
-  if(url.pathname.startsWith('/storage/v1/object/brand-references/'))return route.fulfill(json({Key:'reference'}));
+  if(url.pathname.startsWith('/storage/v1/object/brand-references/')){
+   if(request.method()==='POST')calls.push({name:'image-upload',contentType:request.headers()['content-type'],body:request.postData()||''});
+   return route.fulfill(json({Key:'reference'}));
+  }
   if(url.pathname.startsWith('/storage/v1/object/sign/brand-videos/'))return route.fulfill(json({signedURL:'/object/sign/brand-videos/final.mp4?token=local-test'}));
   if(url.pathname.includes('/brand-videos/')&&(url.pathname.startsWith('/storage/v1/object/')||url.pathname==='/storage/v1/object/sign/brand-videos/final.mp4')){
    if(!url.pathname.includes('/sign/')&&delayVideoDownload){delayedDownloads++;await new Promise(resolve=>setTimeout(resolve,delayVideoDownload));}
@@ -53,6 +56,11 @@ test('browser separates script creation, editing, count change and explicit vide
   }
   if(url.pathname==='/rest/v1/rpc/queue_brand_job'){
    calls.push({name:'queue'});job.status='script_queued';return route.fulfill(json(job));
+  }
+  if(url.pathname==='/rest/v1/rpc/retry_brand_job'){
+   calls.push({name:'retry',args:request.postDataJSON()});
+   if(job.status==='error')job.status='video_queued';
+   return route.fulfill(json(job));
   }
   if(url.pathname==='/rest/v1/rpc/commit_brand_script_v3'){
    const args=request.postDataJSON();calls.push({name:args.p_submit?'video':'save',args});
@@ -80,10 +88,24 @@ test('browser separates script creation, editing, count change and explicit vide
  await page.locator('#create-form').waitFor();
  await page.locator('#scene-count').selectOption('2');
  await page.locator('#content').fill('Giới thiệu Đại Ngân Farm bằng lời nói tự nhiên');
- await page.locator('#reference').setInputFiles({name:'reference.png',mimeType:'image/png',buffer:Buffer.from([137,80,78,71,13,10,26,10,0,0,0,0,0,0,0,0])});
+ await page.locator('#reference').setInputFiles({name:'broken.png',mimeType:'image/png',buffer:Buffer.from('not an image')});
+ await page.waitForFunction(()=>document.querySelector('#image-processing-status')?.textContent.includes('Không đọc được ảnh'));
+ assert.equal(await page.locator('#create-form .create-button').isDisabled(),true);
+ const imageBytes=Buffer.from(await page.evaluate(async()=>{
+  const canvas=document.createElement('canvas');canvas.width=800;canvas.height=400;
+  const context=canvas.getContext('2d');context.fillStyle='#234567';context.fillRect(0,0,800,400);context.fillStyle='#f1c40f';context.fillRect(320,100,160,200);
+  const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+  return [...new Uint8Array(await blob.arrayBuffer())];
+ }));
+ await page.locator('#reference').setInputFiles({name:'reference-landscape.png',mimeType:'image/png',buffer:imageBytes});
+ await page.waitForFunction(()=>document.querySelector('#image-processing-status')?.textContent.includes('Đã xử lý thành ảnh 720 × 1280'));
+ await page.waitForFunction(()=>document.querySelector('#image-preview')?.complete&&document.querySelector('#image-preview')?.naturalWidth===720);
+ assert.equal(await page.locator('#image-preview').evaluate(image=>[image.naturalWidth,image.naturalHeight].join('x')),'720x1280');
  await page.locator('#create-form .create-button').click();
  await page.locator('#jobs-list').getByText('Chờ tạo kịch bản').waitFor();
- assert.equal(calls.map(call=>call.name).join(','),'submit,queue');
+ assert.equal(calls.map(call=>call.name).join(','),'submit,image-upload,queue');
+ const imageUpload=calls.find(call=>call.name==='image-upload');
+ assert.match(imageUpload.contentType,/multipart\/form-data/);assert.match(imageUpload.body,/reference-9x16\.jpg/);assert.match(imageUpload.body,/image\/jpeg/);
  assert.equal(calls[0].args.p_scene_count,2);
  assert.match(await page.locator('#notice').innerText(),/Chưa bắt đầu tạo video/);
  job={...job,status:'script_ready',plan:plan(2),script_revision:1};
@@ -143,4 +165,10 @@ test('browser separates script creation, editing, count change and explicit vide
   assert.equal((await download).suggestedFilename(),`muse-${id}.mp4`);
   assert.equal(delayedDownloads,1,'the actual MP4 download crossed a list refresh');
   assert.equal(await page.locator('.video-slot video').count(),1);
+  job={...job,status:'error',workflow_phase:'video',error:'Muse chưa trả video đúng hạn; biên nhận được giữ để tiếp tục.',error_code:'MUSE_TIMEOUT',retryable:true,attempt:3,max_attempts:3,final_path:null};
+  await page.reload();await page.locator('.job-error').getByText('Muse chưa trả video',{exact:false}).waitFor();
+  await page.getByRole('button',{name:'Tạo lại video'}).click();
+  await page.locator('#jobs-list').getByText('Chờ tạo video').waitFor();
+  assert.equal(calls.filter(call=>call.name==='retry').length,1,'the retry is submitted once and remains idempotent');
+  assert.equal(calls.find(call=>call.name==='retry').args.p_id,id);
 });

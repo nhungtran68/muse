@@ -9,6 +9,7 @@ import {SpeechAuditor} from './speech-audit.mjs';
 import {checkMediaToolsAvailable} from './ffmpeg.mjs';
 import {failBrandJobV2,processBrandJobV2,processBrandScriptV3} from './workflow-v2.mjs';
 import {claimNextBrandJob} from './queue.mjs';
+import {persistJobFailure} from './job-failure.mjs';
 import {LeaseGuard} from './lease-guard.mjs';
 import {runtimeDataDir,encryptedSessionStorage,acquireInstanceLock} from './runtime-state.mjs';
 
@@ -89,7 +90,10 @@ try{
       }
       catch(error){
         console.error('Yêu cầu lỗi',job.id,error.message);
-        if(!lost)await failBrandJobV2(job,error,{client:supabase,workerId,leaseToken:token}).catch(err=>console.error('Không lưu được lỗi:',err.message));
+        if(!lost)await persistJobFailure({
+          persist:()=>failBrandJobV2(job,error,{client:supabase,workerId,leaseToken:token}),
+          stop:writeError=>stopForLease(Error(`Không lưu được trạng thái lỗi của yêu cầu ${job.id}: ${writeError?.message||'lỗi kết nối cơ sở dữ liệu'}`))
+        });
       }
     }
   }

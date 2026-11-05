@@ -5,10 +5,19 @@ import {spawn} from 'node:child_process';
 import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {processBrandJobV2,processBrandScriptV3} from './workflow-v2.mjs';
+import {failBrandJobV2,processBrandJobV2,processBrandScriptV3} from './workflow-v2.mjs';
 import {probeVideo} from './ffmpeg.mjs';
 
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
+
+test('a failed video remains manually retryable after an earlier worker attempt limit',async()=>{
+  let patch;
+  await failBrandJobV2({id:'job',claim_token:'claim',attempt:5,max_attempts:3},
+    Object.assign(Error('Muse timed out'),{code:'MUSE_TIMEOUT',retryable:true}),
+    {client:{async rpc(_name,args){patch=args.p_patch;return {data:{id:'job'},error:null};}},workerId:'worker',leaseToken:'lease'});
+  assert.equal(patch.status,'error');assert.equal(patch.retryable,true);assert.equal(patch.error_code,'MUSE_TIMEOUT');
+});
+
 async function clip(file,color,seconds=5,size='90x160'){
   await new Promise((resolve,reject)=>{
     const p=spawn('ffmpeg',['-y','-v','error','-f','lavfi','-i',`color=c=${color}:s=${size}:r=5:d=${seconds}`,'-c:v','libx264','-preset','ultrafast','-threads','1','-pix_fmt','yuv420p',file],{windowsHide:true});
@@ -201,7 +210,7 @@ test('explicit Muse refusal retries a fresh generation with unchanged approved d
   assert.equal(patches.at(-1).status,'done');
 });
 
-test('uncertain Muse timeout keeps its receipt and never submits a new generation',async t=>{
+test('one uncertain Muse timeout marks the scene failed and keeps its receipt without resubmitting',async t=>{
   const root=await mkdtemp(path.join(tmpdir(),'muse-v3-timeout-'));t.after(()=>rm(root,{recursive:true,force:true}));
   const image=Buffer.alloc(128,4);image.set([137,80,78,71,13,10,26,10]);
   const job={id:randomUUID(),user_id:randomUUID(),claim_token:randomUUID(),schema_version:3,
@@ -218,11 +227,34 @@ test('uncertain Muse timeout keeps its receipt and never submits a new generatio
     }};
   await assert.rejects(processBrandJobV2(job,{client,muse,workRoot:root,workerId:randomUUID(),leaseToken:randomUUID(),retryDelayMs:0}),
     error=>error.code==='MUSE_TIMEOUT');
-  assert.deepEqual(generations,[0,0,0]);
+  assert.deepEqual(generations,[0]);
   const patches=client.patches.filter(p=>p.name==='update_brand_scene_v2').map(p=>p.args.p_patch);
   assert.equal(patches.filter(p=>p.request_receipt?.key==='uncertain-request').length,1);
   assert.ok(patches.some(p=>p.request_receipt?.key==='uncertain-request'));
   assert.equal(patches.some(p=>p.generation!==undefined||p.request_receipt===null),false);
+  assert.ok(patches.some(p=>p.status==='error'&&p.error_code==='MUSE_TIMEOUT'));
+});
+
+test('a timed-out job is recorded as failed and the next member job can finish independently',async t=>{
+  const root=await mkdtemp(path.join(tmpdir(),'muse-v3-queue-recovery-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const images=[Buffer.alloc(128,8),Buffer.alloc(128,9)];images[0].set([137,80,78,71,13,10,26,10]);images[1].set([137,80,78,71,13,10,26,10]);
+  const jobs=images.map((image,index)=>({id:randomUUID(),user_id:randomUUID(),claim_token:randomUUID(),schema_version:3,
+    workflow_phase:'video',status:'generating',reference_path:`owner-${index}/reference`,reference_sha256:hash(image),
+    scene_count:1,scene_seconds:10,attempt:1,max_attempts:3,plan:[{index:1,seconds:10,dialogue:`Approved dialogue ${index}`}]}));
+  const scenes=new Map(jobs.map(job=>[job.id,[{scene_index:1,status:'waiting',generation:0,request_receipt:null}]]));
+  const client=fakeClient(jobs,images,scenes),video=path.join(root,'second-member-scene.mp4');await clip(video,'blue',10);
+  const muse={async beginJob(){return {url:'https://muse.ai/thread/isolated'};},async generateSceneV2(job,scene,imagePath,{onBeforeSend}){
+    assert.equal(hash(await readFile(imagePath)),job.reference_sha256);
+    if(job.id===jobs[0].id){await onBeforeSend({key:'saved-receipt'});throw Object.assign(Error('generation timed out'),{code:'MUSE_TIMEOUT',retryable:true});}
+    await onBeforeSend({key:'second-member'});return {path:video};
+  }};
+  let timeout;
+  await assert.rejects(processBrandJobV2(jobs[0],{client,muse,workRoot:root,workerId:'worker',leaseToken:'lease'}),error=>{timeout=error;return error.code==='MUSE_TIMEOUT';});
+  await failBrandJobV2(jobs[0],timeout,{client,workerId:'worker',leaseToken:'lease'});
+  const finished=await processBrandJobV2(jobs[1],{client,muse,auditor:{async verify(){return {ok:true};}},workRoot:root,workerId:'worker',leaseToken:'lease'});
+  assert.ok(client.patches.some(p=>p.name==='update_brand_job_v2'&&p.args.p_id===jobs[0].id&&p.args.p_patch.status==='error'));
+  assert.ok(client.objects.has('brand-videos/'+finished));assert.ok(finished.includes(jobs[1].id));assert.ok(!finished.includes(jobs[0].id));
+  assert.equal(client.sceneData.get(jobs[1].id)[0].status,'done');
 });
 
 test('repeated explicit Muse refusals stop after the bounded third generation',async t=>{
