@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {joinScenes,probeVideo,validateScene} from './ffmpeg.mjs';
+import {isSingleVideoScene} from '../shared/single-video-request.mjs';
 
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 function extension(bytes){
@@ -60,13 +61,15 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
       let generation=Number(previous?.generation||0);
       const generationLimit=Math.floor(generation/3)*3+2;
       let receipt=previous?.request_receipt||null;
+      const singleRequest=isSingleVideoScene(scene);
       while(true){
         let video;
         try{
           console.log(`Yêu cầu ${job.id} · đoạn ${scene.index}/${job.scene_count} · lần tạo ${generation%3+1}/3${receipt?' · tiếp tục nhận kết quả':' · gửi Muse'}`);
           video=await muse.generateSceneV2(job,{...scene,generation},image,{
             receipt,
-            onBeforeSend:async nextReceipt=>{await updateScene(scene.index,{status:'generating',submission_state:'sending',request_receipt:nextReceipt});receipt=nextReceipt;}
+            onBeforeSend:async nextReceipt=>{await updateScene(scene.index,{status:'generating',submission_state:'sending',request_receipt:nextReceipt});receipt=nextReceipt;},
+            onSubmitted:async()=>updateScene(scene.index,{submission_state:'sent'})
           });
         }catch(error){
           if(error?.code==='SUBMISSION_NOT_FOUND'){
@@ -79,6 +82,11 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
           }
           // Muse has explicitly said it will not deliver this clip. A new generation
           // is safe; an uncertain send or timeout must retain its original receipt.
+          if(singleRequest&&error?.code==='MUSE_OUTPUT_REJECTED'){
+            await updateScene(scene.index,{status:'error',submission_state:'not_sent',request_receipt:null,error_code:error.code,error:String(error.message||'Muse từ chối video.').slice(0,400)});
+            error.retryable=true;
+            throw error;
+          }
           if(error?.code!=='MUSE_OUTPUT_REJECTED')throw error;
           if(generation>=generationLimit){
             await updateScene(scene.index,{status:'error',error_code:error.code,error:String(error.message||'Muse từ chối video.').slice(0,400)});
@@ -92,14 +100,25 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
           continue;
         }
         file=video.path;
-        const meta=await probeVideo(file);
+        let meta;
+        try{meta=await probeVideo(file);}
+        catch(error){
+          if(!singleRequest)throw error;
+          const failure=Object.assign(error,{code:error?.code||'SCENE_MEDIA_INVALID',retryable:true});
+          await updateScene(scene.index,{status:'error',submission_state:'not_sent',request_receipt:null,error_code:failure.code,error:String(failure.message||'Video Muse trả về không đọc được.').slice(0,400)});
+          throw failure;
+        }
         let invalid=null;
         try{validateScene(meta,job.scene_seconds);if(Math.abs(meta.duration-job.scene_seconds)>.4)throw Error(`Sai thời lượng: ${meta.duration}.`);}
         catch(error){invalid=error;}
-        const audit=invalid?null:await auditor.verify(file,scene,job.scene_seconds);
+        const audit=invalid?null:singleRequest?{ok:true,verification:'not_requested'}:await auditor.verify(file,scene,job.scene_seconds);
         if(invalid||!audit.ok){
           const code=invalid?'SCENE_MEDIA_INVALID':audit.reason||'SPEECH_UNVERIFIED';
           const detail=`Đoạn ${scene.index}: ${invalid?.message||'lời thoại không khớp hoặc chưa được đọc hết ('+code+').'}`;
+          if(singleRequest){
+            await updateScene(scene.index,{status:'error',submission_state:'not_sent',request_receipt:null,speech_audit:audit,error_code:code,error:detail});
+            throw Object.assign(Error(detail),{code,retryable:true});
+          }
           if(generation<generationLimit){
             generation++;receipt=null;
             await updateScene(scene.index,{status:'generating',generation,submission_state:'not_sent',request_receipt:null,
@@ -129,7 +148,9 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
   await updateJob({status:'joining'});
   const final=path.join(dir,'final.mp4'),probe=await joinScenes(files,final,job.scene_count*job.scene_seconds);
   if(Math.abs(probe.duration-job.scene_count*job.scene_seconds)>=.7)throw Object.assign(Error('Video ghép sai tổng thời lượng yêu cầu.'),{code:'FINAL_DURATION_MISMATCH',retryable:false});
-  const finalAudit=await auditor.verify(final,{dialogue:plan.map(s=>s.dialogue).filter(Boolean).join(' '),source_quotes:plan.flatMap(s=>s.source_quotes||[])},job.scene_count*job.scene_seconds);
+  const finalAudit=job.scene_count===1&&isSingleVideoScene(plan[0])
+    ?{ok:true,verification:'not_requested'}
+    :await auditor.verify(final,{dialogue:plan.map(s=>s.dialogue).filter(Boolean).join(' '),source_quotes:plan.flatMap(s=>s.source_quotes||[])},job.scene_count*job.scene_seconds);
   if(!finalAudit.ok)throw Object.assign(Error('Lời thoại trong video ghép chưa được xác nhận đầy đủ.'),{code:'FINAL_SPEECH_UNVERIFIED',retryable:false});
   const finalPath=`${job.user_id}/${job.id}/${job.claim_token}/final.mp4`;
   await upload(client,finalPath,final);
