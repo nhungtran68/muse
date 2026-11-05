@@ -18,6 +18,27 @@ test('a failed video remains manually retryable after an earlier worker attempt 
   assert.equal(patch.status,'error');assert.equal(patch.retryable,true);assert.equal(patch.error_code,'MUSE_TIMEOUT');
 });
 
+test('an unlocated saved submission is shown as failed while its receipt remains resumable',async t=>{
+  const root=await mkdtemp(path.join(tmpdir(),'muse-v3-resume-receipt-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const image=Buffer.alloc(128,4);image.set([137,80,78,71,13,10,26,10]);
+  const job={id:randomUUID(),user_id:randomUUID(),claim_token:randomUUID(),schema_version:3,workflow_phase:'video',status:'generating',
+    reference_path:'owner/reference',reference_sha256:hash(image),scene_count:1,scene_seconds:10,
+    plan:[{index:1,seconds:10,dialogue:'Đây là lời thoại đã được khách hàng duyệt.'}]};
+  const receipt={key:'saved-key',url:'https://muse.ai/thread/12345678-1234-1234-1234-123456789abc'};
+  const scenes=new Map([[job.id,[{scene_index:1,status:'generating',generation:0,submission_state:'sending',request_receipt:receipt}]]]);
+  const client=fakeClient([job],[image],scenes);
+  const muse={async beginJob(){return {url:receipt.url};},async generateSceneV2(_job,_scene,_image,{receipt:seen}){
+    assert.deepEqual(seen,receipt);
+    throw Object.assign(Error('Không tìm thấy yêu cầu cảnh 1 đã gửi; có thể tiếp tục kiểm tra biên nhận cũ, không gửi lại.'),{code:'SUBMISSION_NOT_FOUND',retryable:true});
+  }};
+  await assert.rejects(processBrandJobV2(job,{client,muse,workRoot:root,workerId:randomUUID(),leaseToken:randomUUID()}),{code:'SUBMISSION_NOT_FOUND'});
+  const failed=client.sceneData.get(job.id)[0];
+  assert.equal(failed.status,'error');
+  assert.equal(failed.error_code,'SUBMISSION_NOT_FOUND');
+  assert.deepEqual(failed.request_receipt,receipt);
+  assert.equal(failed.output_path,undefined);
+});
+
 async function clip(file,color,seconds=5,size='90x160'){
   await new Promise((resolve,reject)=>{
     const p=spawn('ffmpeg',['-y','-v','error','-f','lavfi','-i',`color=c=${color}:s=${size}:r=5:d=${seconds}`,'-c:v','libx264','-preset','ultrafast','-threads','1','-pix_fmt','yuv420p',file],{windowsHide:true});

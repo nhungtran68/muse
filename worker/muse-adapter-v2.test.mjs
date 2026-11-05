@@ -85,6 +85,18 @@ test('a timed-out retry keeps its receipt and picks up the matching result witho
   assert.equal(clicks, 1);
 });
 
+test('a saved receipt missing from chat is recoverable by polling only and never resubmitted', async () => {
+  const {adapter}=fixture();
+  const job={id:'12345678-1234-1234-1234-123456789abc',schema_version:2,scene_count:3,scene_seconds:10};
+  const scene={index:1,generation:0};
+  const receipt={key:'BRAND_12345678_1234_1234_1234_123456789abc_SCENE_1_GEN_0'};
+  adapter.composerTimeoutMs=0;
+  adapter.sceneResponse=async()=>({requested:false,video:null});
+  adapter.cleanComposer=()=>assert.fail('A saved receipt must never be resubmitted');
+  await assert.rejects(adapter.generateSceneV2(job,scene,null,{receipt}),error=>
+    error.code==='SUBMISSION_NOT_FOUND'&&error.retryable===true&&error.message.includes('không gửi lại'));
+});
+
 test('reports the scoped assistant refusal and never resends a recorded scene',async()=>{
   const {adapter}=fixture(),job={id:'12345678-1234-1234-1234-123456789abc',scene_seconds:10};
   const receipt={key:'BRAND_12345678_1234_1234_1234_123456789abc_SCENE_1_GEN_0'};

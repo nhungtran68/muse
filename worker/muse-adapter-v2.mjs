@@ -144,7 +144,7 @@ export class MuseAdapterV2 extends MuseAdapter {
     let response=await this.sceneResponse(key);
     if (receipt && !response.requested) {
       // The composer may appear before the saved chat messages load.
-      const historyDeadline = Date.now() + Math.min(this.composerTimeoutMs, 10000);
+      const historyDeadline = Date.now() + Math.min(this.composerTimeoutMs, 30000);
       while (!response.requested && Date.now() < historyDeadline) {
         await sleep(Math.min(this.pollMs, historyDeadline - Date.now()));
         response = await this.sceneResponse(key);
@@ -152,7 +152,7 @@ export class MuseAdapterV2 extends MuseAdapter {
     }
     if(!response.requested){
       // A saved receipt means Enter may already have been pressed. Never resend.
-      if(receipt)throw Object.assign(Error(`Không tìm thấy yêu cầu cảnh ${scene.index} đã gửi; cần kiểm tra trước khi gửi lại.`),{code:'UNCERTAIN_SUBMISSION',retryable:false});
+      if(receipt)throw Object.assign(Error(`Không tìm thấy yêu cầu cảnh ${scene.index} đã gửi; có thể tiếp tục kiểm tra biên nhận cũ, không gửi lại.`),{code:'SUBMISSION_NOT_FOUND',retryable:true});
       const input=await this.cleanComposer();
       await this.attachReference(imagePath);
       const dialogue=scene.dialogue?`Đọc lời thoại tiếng Việt đúng nguyên văn, không thêm hoặc bớt. Nếu không có nhân vật trong hình, dùng giọng thuyết minh. Đọc chậm tự nhiên, trải đều lời trong khoảng 65–90% thời lượng cảnh, bắt đầu sớm, không dồn lời rồi kết thúc quá sớm, không kéo dài âm hoặc lặp từ: “${scene.dialogue}”.`: 'Không có lời thoại hoặc giọng nói.';
