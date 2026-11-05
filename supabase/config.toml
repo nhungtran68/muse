@@ -1,0 +1,4 @@
+[functions.expire-brand-outputs]
+# Cron supplies the public project API key. The function accepts no job IDs or
+# paths and can claim only expired rows; its service key stays server-side.
+verify_jwt = false
