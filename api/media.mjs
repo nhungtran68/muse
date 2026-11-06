@@ -48,7 +48,7 @@ export function createMediaHandler({makeClient=createClient,s3,sign=getSignedUrl
       const token=authorization.match(/^Bearer\s+(.+)$/i)?.[1];if(!token)fail(401,'Cần đăng nhập.');
       const client=makeClient(projectUrl,publicKey,{global:{headers:{Authorization:`Bearer ${token}`}},auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
       const auth=await client.auth.getUser(token);if(auth.error||!auth.data?.user?.id)fail(401,'Phiên đăng nhập đã hết hạn.');
-      const query=await client.from('brand_jobs').select('id,user_id,status,reference_path,reference_expires_at,storage_provider,reference_storage_provider,final_path,output_expires_at,retention_status,brand_scenes(status,output_path,output_expires_at)').eq('id',jobId).maybeSingle();
+      const query=await client.from('brand_jobs').select('id,user_id,status,reference_path,reference_expires_at,storage_provider,reference_storage_provider,final_path,output_expires_at,retention_status,brand_scenes(scene_index,status,output_path,output_expires_at)').eq('id',jobId).maybeSingle();
       const job=query.data;if(query.error||!job)fail(404,'Không tìm thấy yêu cầu.');
       const name=body.path;validateName(name,job);
       if(providerFor(job,bucket)!=='r2')fail(409,'File này không nằm trong kho R2.');
@@ -58,7 +58,9 @@ export function createMediaHandler({makeClient=createClient,s3,sign=getSignedUrl
         const remaining=expiry?Math.floor((Date.parse(expiry)-now())/1000):600;
         const expiresIn=Math.max(1,Math.min(600,Number.isFinite(remaining)?remaining:600));
         const extension=name.match(/\.(png|jpe?g|webp|mp4)$/i)?.[1]?.toLowerCase()||'mp4';
-        const disposition=body.download===true?{ResponseContentDisposition:`attachment; filename="muse-${jobId}.${extension}"`}:{};
+        const scene=job.final_path===name?null:(job.brand_scenes||[]).find(item=>item.output_path===name);
+        const suffix=Number.isSafeInteger(scene?.scene_index)&&scene.scene_index>0?`-doan-${scene.scene_index}`:'';
+        const disposition=body.download===true?{ResponseContentDisposition:`attachment; filename="muse-${jobId}${suffix}.${extension}"`}:{};
         const url=await sign(s3,new GetObjectCommand({Bucket:storageBucket,Key:keyFor(bucket,name),...disposition}),{expiresIn});
         return res.status(200).json({url});
       }

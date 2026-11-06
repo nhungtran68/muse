@@ -70,6 +70,10 @@ test('download links request an attachment without changing previews or granting
  assert.equal((await call('owner',{...body,download:true})).status,200);
  assert.equal(state.signatures.at(-1).command.input.ResponseContentDisposition,`attachment; filename="muse-${jobId}.mp4"`);
  assert.equal(state.signatures.at(-1).options.expiresIn,600);
+ const scenePath=`${owner}/${jobId}/${claim}/scene-02.mp4`;
+ state.job.brand_scenes=[{scene_index:2,status:'done',output_path:scenePath,output_expires_at:future}];
+ assert.equal((await call('owner',{...body,path:scenePath,download:true})).status,200);
+ assert.equal(state.signatures.at(-1).command.input.ResponseContentDisposition,`attachment; filename="muse-${jobId}-doan-2.mp4"`);
  state.job.output_expires_at=past;
  assert.equal((await call('owner',{...body,download:true})).status,403);
 });
