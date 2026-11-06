@@ -458,15 +458,21 @@ async function refreshJobs({force=false}={}) {
     });
   }
   list.querySelectorAll('.resume-file').forEach(input=>input.addEventListener('change',async()=>{
-    const file=input.files[0],job=result.data.find(item=>item.id===input.dataset.id);if(!file||!job)return;
+    let file=input.files[0];const job=result.data.find(item=>item.id===input.dataset.id);
+    if(!file||!job||input.disabled||session?.user.id!==userId)return;
     input.disabled=true;
     try{
-      if(await fileHash(file)!==job.reference_sha256)throw Error('Ảnh không khớp ảnh đã chọn ban đầu.');
-      try{await uploadMedia(supabase,{provider:job.reference_storage_provider,bucket:'brand-references',path:job.reference_path,jobId:job.id,token:session.access_token,contentType:file.type,data:file});}
-      catch(error){if(job.reference_storage_provider==='r2')throw error;const old=await supabase.storage.from('brand-references').download(job.reference_path);if(old.error||await fileHash(old.data)!==job.reference_sha256)throw error;}
-      const queued=await supabase.rpc('queue_brand_job',{p_id:job.id});if(queued.error)throw queued.error;
+      if(await fileHash(file)!==job.reference_sha256&&job.creation_mode==='video_10s')file=(await normalizeReferenceImage(file)).file;
+      if(await fileHash(file)!==job.reference_sha256)throw Error('Ảnh không khớp ảnh đã chọn ban đầu. Hãy chọn lại ảnh gốc trên thiết bị đã gửi yêu cầu.');
+      if(session?.user.id!==userId||!input.isConnected)return;
+      const token=session.access_token,actor=createClient(supabaseUrl,supabaseKey,{global:{headers:{Authorization:'Bearer '+token}},auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
+      try{await uploadMedia(actor,{provider:job.reference_storage_provider,bucket:'brand-references',path:job.reference_path,jobId:job.id,token,contentType:file.type,data:file});}
+      catch(error){if(job.reference_storage_provider==='r2')throw error;const old=await actor.storage.from('brand-references').download(job.reference_path);if(old.error||await fileHash(old.data)!==job.reference_sha256)throw error;}
+      if(session?.user.id!==userId||!input.isConnected)return;
+      const queued=await actor.rpc('queue_brand_job',{p_id:job.id});if(queued.error)throw queued.error;
       message('Đã đưa yêu cầu vào hàng chờ.','success');await refreshJobs();
-    }catch(error){message(error.message,'error');input.disabled=false;}
+    }catch(error){if(session?.user.id===userId)message(error.message,'error');}
+    finally{if(input.isConnected)input.disabled=false;}
   }));
   list.querySelectorAll('.resume-oversize-job').forEach(button=>button.addEventListener('click',async()=>{
     const id=button.dataset.id;if(retryingJobs.has(id))return;retryingJobs.add(id);button.disabled=true;
