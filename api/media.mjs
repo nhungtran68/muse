@@ -57,7 +57,9 @@ export function createMediaHandler({makeClient=createClient,s3,sign=getSignedUrl
         const expiry=bucket===REFERENCE_BUCKET?job.reference_expires_at:job.final_path===name?job.output_expires_at:(job.brand_scenes||[]).find(scene=>scene.output_path===name)?.output_expires_at;
         const remaining=expiry?Math.floor((Date.parse(expiry)-now())/1000):600;
         const expiresIn=Math.max(1,Math.min(600,Number.isFinite(remaining)?remaining:600));
-        const url=await sign(s3,new GetObjectCommand({Bucket:storageBucket,Key:keyFor(bucket,name)}),{expiresIn});
+        const extension=name.match(/\.(png|jpe?g|webp|mp4)$/i)?.[1]?.toLowerCase()||'mp4';
+        const disposition=body.download===true?{ResponseContentDisposition:`attachment; filename="muse-${jobId}.${extension}"`}:{};
+        const url=await sign(s3,new GetObjectCommand({Bucket:storageBucket,Key:keyFor(bucket,name),...disposition}),{expiresIn});
         return res.status(200).json({url});
       }
       if(!['put','finalize'].includes(action))fail(400,'Thao tác không hợp lệ.');
