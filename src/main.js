@@ -183,6 +183,9 @@ function formatRemaining(milliseconds) {
 }
 
 function updateRetentionCountdowns() {
+  document.querySelectorAll('.download-file').forEach(link=>{
+    if(Number(link.dataset.refreshAt||Infinity)<=Date.now())link.refreshDownloadLink?.();
+  });
   document.querySelectorAll('.job-thumbnail[data-expiry]').forEach(image=>{
     if(!image.dataset.expiry||Date.parse(image.dataset.expiry)>Date.now())return;
     image.hidden=true;image.removeAttribute('src');
@@ -235,19 +238,40 @@ function canDownloadFinal(job) {
   return job.status==='done'&&Boolean(job.final_path)&&mediaStillAvailable(job.retention_status,job.output_expires_at);
 }
 
-async function downloadStoredVideo({path,id,scene,button,userId,retentionStatus,expiresAt,provider}) {
-  button.disabled=true;
-  try {
-    if(!mediaStillAvailable(retentionStatus,expiresAt))throw Error('File đã hết hạn hoặc đang được xóa.');
-    const actor=createClient(supabaseUrl,supabaseKey,{global:{headers:{Authorization:'Bearer '+session.access_token}},auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
-    const file=await downloadMedia(actor,{provider,bucket:'brand-videos',path,jobId:id,token:session.access_token});
-    if(session?.user.id!==userId)return;
-    if(!mediaStillAvailable(retentionStatus,expiresAt))throw Error('File đã hết hạn trong lúc tải xuống.');
-    const url=URL.createObjectURL(file),link=document.createElement('a');
-    link.href=url;link.download=`muse-${id}${scene?`-doan-${scene}`:''}.${path.match(/\.(png|jpe?g|webp|mp4)$/i)?.[1]||'mp4'}`;document.body.append(link);link.click();link.remove();
-    setTimeout(()=>URL.revokeObjectURL(url),60000);
-  } catch(error) { if(session?.user.id===userId)message('Không tải được kết quả: '+error.message,'error'); }
-  finally { if(button.isConnected)button.disabled=false; }
+function prepareDownloadLink(link,{path,id,scene,userId,retentionStatus,expiresAt,provider}) {
+  const filename=`muse-${id}${scene?`-doan-${scene}`:''}.${path.match(/\.(png|jpe?g|webp|mp4)$/i)?.[1]||'mp4'}`;
+  const label=link.dataset.label||'Tải xuống';
+  let busy=false,validUntil=0,lastError='';
+  const usable=()=>link.isConnected&&session?.user.id===userId&&mediaStillAvailable(retentionStatus,expiresAt);
+  const prepare=async()=>{
+    if(busy||!usable())return;
+    busy=true;link.dataset.refreshAt='';
+    if(!link.hasAttribute('href')||Date.now()>=validUntil){link.removeAttribute('href');link.setAttribute('aria-disabled','true');link.textContent='Đang chuẩn bị…';}
+    try{
+      const ttl=Math.min(540,expiresAt?Math.max(1,Math.floor((Date.parse(expiresAt)-Date.now())/1000)):540);
+      const url=await signedMediaUrl(supabase,{provider,bucket:'brand-videos',path,jobId:id,token:session.access_token,expiresIn:ttl,download:filename});
+      if(!usable())return;
+      validUntil=Date.now()+ttl*1000;lastError='';link.href=url;link.download=filename;link.removeAttribute('aria-disabled');link.textContent=label;
+      link.dataset.refreshAt=String(Date.now()+Math.max(1,ttl-60)*1000);
+    }catch(error){
+      if(!usable())return;
+      lastError=error.message||'Không kết nối được kho file.';
+      if(Date.now()>=validUntil){link.removeAttribute('href');link.removeAttribute('aria-disabled');link.textContent='Thử tải lại';}
+      else link.dataset.refreshAt=String(Date.now()+30000);
+    }finally{busy=false;}
+  };
+  link.refreshDownloadLink=prepare;
+  link.addEventListener('click',event=>{
+    if(!usable()){event.preventDefault();message('File đã hết hạn hoặc phiên đăng nhập đã thay đổi.','error');return;}
+    if(!link.hasAttribute('href')||Date.now()>=validUntil){
+      event.preventDefault();
+      if(lastError)message('Chưa chuẩn bị được file: '+lastError+'. Đang thử lại.','error');
+      else if(!busy)message('Liên kết đã hết hạn, đang chuẩn bị lại. Hãy bấm tải xuống khi sẵn sàng.','info');
+      prepare();
+    }
+  });
+  link.addEventListener('keydown',event=>{if(!link.hasAttribute('href')&&(event.key==='Enter'||event.key===' ')){event.preventDefault();link.click();}});
+  prepare();
 }
 
 function updateJobsPagination() {
@@ -366,7 +390,7 @@ async function refreshJobs({force=false}={}) {
     const isImage=job.creation_mode==='image',mediaName=isImage?'ảnh':'video';
     const firstScene=job.brand_scenes?.find(scene=>scene.scene_index===1);
     const displayError=job.error_code==='CONTENT_TOO_LONG'?'Muse chưa cô đọng được bản thô ở lượt trước. Hãy tạo lại kịch bản; Muse sẽ tự giữ ý chính và lược chi tiết phụ.':job.error;
-    const finalActions=canDownloadFinal(job)?`<button class="outline view-video" data-kind="${isImage?'image':'video'}" data-path="${safe(job.final_path)}" data-id="${safe(job.id)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(job.output_expires_at||'')}">Xem ${mediaName}</button><button class="primary download-final" data-path="${safe(job.final_path)}" data-id="${safe(job.id)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(job.output_expires_at||'')}">Tải xuống</button>`:'';
+    const finalActions=canDownloadFinal(job)?`<button class="outline view-video" data-kind="${isImage?'image':'video'}" data-path="${safe(job.final_path)}" data-id="${safe(job.id)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(job.output_expires_at||'')}">Xem ${mediaName}</button><a class="primary download-final download-file" role="button" tabindex="0" aria-disabled="true" data-path="${safe(job.final_path)}" data-id="${safe(job.id)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(job.output_expires_at||'')}">Đang chuẩn bị…</a>`:'';
     const safeResume=hasUncertainSubmission(job);
     const statusLabel=singleVideo&&job.status==='generating'?(firstScene?.submission_state==='sent'?`Muse đang tạo ${mediaName}`:'Đang gửi yêu cầu'):singleVideo&&job.status==='planning'?'Đang gửi yêu cầu':singleVideo&&job.status==='joining'?'Đang lưu kết quả':status[job.status]||job.status;
     const otherAction=job.status==='uploading'?`<label class="outline">Chọn lại ảnh<input class="resume-file" type="file" accept="image/png,image/jpeg,image/webp" data-id="${safe(job.id)}"></label>`:job.status==='error'&&job.error_code==='MEDIA_TOO_LARGE'?`<button class="outline resume-oversize-job" type="button" data-id="${safe(job.id)}">Nhận lại kết quả</button>`:safeResume?`<button class="outline resume-uncertain-job" type="button" data-id="${safe(job.id)}">Tiếp tục kiểm tra Muse</button>`:singleVideo&&job.status==='error'&&job.retryable?`<button class="outline retry-single-job" type="button" data-id="${safe(job.id)}">Gửi lại ${mediaName}</button>`:job.status==='error'&&job.retryable?`<button class="outline retry-job" type="button" data-id="${safe(job.id)}">${job.workflow_phase==='script'?'Tạo lại kịch bản':'Tạo lại video'}</button>`:'';
@@ -485,7 +509,7 @@ async function refreshJobs({force=false}={}) {
     }catch(error){message(error.message||'Không thể xếp lại đoạn video. Hãy tải lại trạng thái rồi thử lại.','error');}
     finally{retryingScenes.delete(key);if(session?.user.id===userId)await refreshJobs({force:true});if(button.isConnected)button.disabled=false;}
   }));
-  list.querySelectorAll('.download-final').forEach(button=>button.addEventListener('click',()=>downloadStoredVideo({path:button.dataset.path,id:button.dataset.id,button,userId,provider:result.data.find(job=>job.id===button.dataset.id)?.storage_provider,retentionStatus:button.dataset.retention,expiresAt:button.dataset.expiry||null})));
+  list.querySelectorAll('.download-final').forEach(link=>prepareDownloadLink(link,{path:link.dataset.path,id:link.dataset.id,userId,provider:result.data.find(job=>job.id===link.dataset.id)?.storage_provider,retentionStatus:link.dataset.retention,expiresAt:link.dataset.expiry||null}));
   list.querySelectorAll('.view-video').forEach(button=>button.addEventListener('click',async()=>{
     if(!mediaStillAvailable(button.dataset.retention,button.dataset.expiry||null)){message('File đã hết hạn hoặc đang được xóa.','error');refreshJobs({force:true});return;}
     button.disabled=true;
@@ -497,8 +521,8 @@ async function refreshJobs({force=false}={}) {
     const slot=document.getElementById(button.dataset.slot||`video-${button.dataset.id}`);
     if(!slot){button.disabled=false;return;}
     const isImage=button.dataset.kind==='image';
-    slot.innerHTML=`${isImage?`<img class="result-image" alt="Ảnh đã tạo từ yêu cầu của bạn" src="${safe(url)}">`:`<video controls playsinline src="${safe(url)}"></video>`}<button class="outline download-video" type="button">${isImage?'Tải ảnh':'Tải MP4'}</button>`;button.hidden=true;
-    slot.querySelector('.download-video').addEventListener('click',event=>downloadStoredVideo({path:button.dataset.path,id:button.dataset.id,scene:button.dataset.scene,button:event.currentTarget,userId,provider,retentionStatus:button.dataset.retention,expiresAt:button.dataset.expiry||null}));
+    slot.innerHTML=`${isImage?`<img class="result-image" alt="Ảnh đã tạo từ yêu cầu của bạn" src="${safe(url)}">`:`<video controls playsinline src="${safe(url)}"></video>`}<a class="outline download-video download-file" role="button" tabindex="0" aria-disabled="true" data-label="${isImage?'Tải ảnh':'Tải MP4'}">Đang chuẩn bị…</a>`;button.hidden=true;
+    prepareDownloadLink(slot.querySelector('.download-video'),{path:button.dataset.path,id:button.dataset.id,scene:button.dataset.scene,userId,provider,retentionStatus:button.dataset.retention,expiresAt:button.dataset.expiry||null});
   }));
 }
 

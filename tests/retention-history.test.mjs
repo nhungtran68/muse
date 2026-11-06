@@ -90,7 +90,7 @@ test('history pages three at a time and retention states survive reload without 
   assert.deepEqual(historyQueries.slice(-1),[{range:'',offset:'0',limit:'3'}]);
   await page.locator('#jobs-list .view-video:not(.view-scene)').first().click();
   await page.locator('#jobs-list video').waitFor();
-  assert.deepEqual(videoSignPaths,[jobs[0].final_path],'only the still-valid output can obtain a signed video URL');
+  assert.ok(videoSignPaths.includes(jobs[0].final_path)&&videoSignPaths.every(filePath=>[jobs[0].final_path,jobs[1].final_path].includes(filePath)),'only still-valid outputs can obtain signed preview or download URLs');
 
   for(const viewport of [{width:1440,height:1000},{width:390,height:844}]){
     await page.setViewportSize(viewport);

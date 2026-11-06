@@ -9,12 +9,12 @@ async function callGateway(client,token,origin,body){
   if(!response.ok)throw Error(result.error||'Không kết nối được kho file.');
   return result;
 }
-export async function signedMediaUrl(client,{provider='supabase',bucket,path,jobId,token,origin,expiresIn=600}){
+export async function signedMediaUrl(client,{provider='supabase',bucket,path,jobId,token,origin,expiresIn=600,download}){
   if(provider!=='r2'){
-    const result=await client.storage.from(bucket).createSignedUrl(path,expiresIn);if(result.error)throw result.error;
+    const result=await client.storage.from(bucket).createSignedUrl(path,expiresIn,download?{download}:undefined);if(result.error)throw result.error;
     return result.data.signedUrl;
   }
-  const result=await callGateway(client,token,origin,{action:'get',bucket,path,jobId});return result.url;
+  const result=await callGateway(client,token,origin,{action:'get',bucket,path,jobId,...(download?{download:true}:{})});return result.url;
 }
 export async function downloadMedia(client,options){
   if(options.provider!=='r2'){

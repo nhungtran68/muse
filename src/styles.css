@@ -457,6 +457,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .retention-state.expired-label { margin-top: 10px; }
 .job-action .download-final { border-color: var(--brand-blue); background: var(--brand-blue); color: #fff; }
 .job-action .download-final:hover:not(:disabled) { background: var(--brand-blue-dark); }
+.download-file { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; cursor: pointer; }
+.download-file[aria-disabled="true"] { opacity: .65; cursor: wait; }
+.video-slot .download-file { margin: 8px 0; }
 @media (max-width: 650px) {
   .retention-intro { margin-top: -7px; }
   .job-heading { align-items: flex-start; }

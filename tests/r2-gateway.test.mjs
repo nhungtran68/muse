@@ -61,6 +61,22 @@ test('signed reads require the matching finished job and stop at expiry',async()
  assert.equal((await call('other',body)).status,404);const ok=await call('owner',body);assert.equal(ok.status,200);assert.equal(ok.headers['Cache-Control'],'no-store, private');
  state.job.storage_provider='supabase';assert.equal((await call('owner',body)).status,409);
 });
+test('download links request an attachment without changing previews or granting another member access',async()=>{
+ const {state,call}=setup(),body={action:'get',jobId,bucket:'brand-videos',path:output};
+ state.job.status='done';state.job.final_path=output;state.job.output_expires_at=future;
+ assert.equal((await call('owner',body)).status,200);
+ assert.equal(state.signatures.at(-1).command.input.ResponseContentDisposition,undefined);
+ assert.equal((await call('other',{...body,download:true})).status,404);
+ assert.equal((await call('owner',{...body,download:true})).status,200);
+ assert.equal(state.signatures.at(-1).command.input.ResponseContentDisposition,`attachment; filename="muse-${jobId}.mp4"`);
+ assert.equal(state.signatures.at(-1).options.expiresIn,600);
+ const scenePath=`${owner}/${jobId}/${claim}/scene-02.mp4`;
+ state.job.brand_scenes=[{scene_index:2,status:'done',output_path:scenePath,output_expires_at:future}];
+ assert.equal((await call('owner',{...body,path:scenePath,download:true})).status,200);
+ assert.equal(state.signatures.at(-1).command.input.ResponseContentDisposition,`attachment; filename="muse-${jobId}-doan-2.mp4"`);
+ state.job.output_expires_at=past;
+ assert.equal((await call('owner',{...body,download:true})).status,403);
+});
 test('cleanup only sends deletion to R2 after a valid scoped expired-job claim',async()=>{
  const {state,call}=setup(),body={action:'expire',jobId,claim,bucket:'brand-videos',paths:[output,output]};
  assert.equal((await call(null,body)).status,403);assert.equal(state.commands.length,0);
