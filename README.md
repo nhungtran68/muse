@@ -1,6 +1,6 @@
 # Muse Studio
 
-Web thành viên tạo video từ ảnh tham chiếu, nội dung thô, số cảnh và mode thời lượng. Muse phân tích, lập kịch bản rồi tạo từng cảnh; worker kiểm tra ảnh, video, lời nói và ghép thành MP4. Trạng thái kiểm thử và triển khai được ghi tại [báo cáo v2](docs/V2-TESTING.md).
+Trang tạo có ba chế độ trong một menu: **Video 10 giây**, **Video tự do**, **Tạo ảnh**. Website gửi một yêu cầu hoàn chỉnh và nhận một kết quả. Video tự do để Muse xử lý độ dài, tỷ lệ và ghép video; tạo ảnh trả về PNG/JPEG/WebP. Chi tiết vận hành và nâng cấp worker 3.1.0 nằm tại [hướng dẫn chế độ tạo](docs/CREATION-MODES.md). Các yêu cầu thương hiệu cũ vẫn giữ kịch bản và tiến trình đã lưu.
 
 ## Thành phần
 

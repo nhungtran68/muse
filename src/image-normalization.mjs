@@ -18,7 +18,7 @@ function decodeImage(file){
   });
 }
 
-export async function normalizeReferenceImage(file){
+export async function normalizeReferenceImage(file,{preserveAspect=false}={}){
   if(!file)throw Error('Chưa chọn ảnh tham chiếu.');
   if(!['image/jpeg','image/png','image/webp'].includes(file.type))throw Error('Định dạng ảnh không hỗ trợ. Hãy chọn JPG, PNG hoặc WebP.');
   if(file.size>MAX_REFERENCE_BYTES)throw Error('Ảnh lớn hơn 10 MB. Hãy nén ảnh hoặc chọn ảnh nhỏ hơn rồi thử lại.');
@@ -29,6 +29,7 @@ export async function normalizeReferenceImage(file){
   try{
     const sourceWidth=decoded.width||decoded.naturalWidth,sourceHeight=decoded.height||decoded.naturalHeight;
     if(!sourceWidth||!sourceHeight)throw Error('Ảnh không có kích thước hợp lệ. Hãy xuất lại ảnh rồi thử lại.');
+    if(preserveAspect)return {file,sourceWidth,sourceHeight,width:sourceWidth,height:sourceHeight,padded:false,preserved:true};
     const {width,height}=REFERENCE_SIZE,rect=containImageRect(sourceWidth,sourceHeight,width,height);
     const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
     const context=canvas.getContext('2d',{alpha:false});
