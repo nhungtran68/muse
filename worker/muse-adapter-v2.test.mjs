@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import {MuseAdapterV2,museVideoRejection,summarizeMuseReply} from './muse-adapter-v2.mjs';
 import {chromium} from 'playwright';
 import {installedBrowserExecutable} from './muse-adapter.mjs';
+import {mkdtemp,readFile,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
 
 function fixture(){
   let current='https://muse.ai/thread/12345678-1234-1234-1234-123456789abc',panel=false;
@@ -116,6 +119,14 @@ test('media selection skips uploaded references, stays in the matching reply, an
  const image=await adapter.sceneResponse('KEY',{kind:'image',finalOnly:true});assert.equal(await image.video.getAttribute('data-id'),'generated');await image.video.dispose();
  await page.locator('[data-id="generated"]').evaluate(node=>node.remove());
  const noImage=await adapter.sceneResponse('KEY',{kind:'image',finalOnly:true});assert.equal(noImage.video,null,'an uploaded reference is never returned as the generated image');
+});
+
+test('an image result downloads its rendered resource without opening the incompatible video dialog',async t=>{
+ const directory=await mkdtemp(path.join(tmpdir(),'muse-image-download-'));t.after(()=>rm(directory,{recursive:true,force:true}));
+ const bytes=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jN1sAAAAASUVORK5CYII=','base64');
+ const adapter=new MuseAdapterV2('',directory);adapter.requirePage=()=>({});
+ const handle={evaluate:async()=>({url:'data:image/png;base64,'+bytes.toString('base64'),width:1,height:1}),click:async()=>assert.fail('Do not open the image viewer when the result resource is available')};
+ const result=await adapter.downloadImage('image-result',handle);assert.match(result.path,/\.png$/);assert.deepEqual(await readFile(result.path),bytes);
 });
 
 test('a new single video request persists the Muse receipt before sending and marks it sent after acknowledgement',async()=>{

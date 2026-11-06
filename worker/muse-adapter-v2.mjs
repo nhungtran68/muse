@@ -5,7 +5,7 @@ import {buildSingleVideoPrompt,isSingleVideoScene} from '../shared/single-video-
 import {buildFlexibleMediaPrompt,isFlexibleMediaJob} from '../shared/creation-modes.mjs';
 import {imageFormat} from './single-media.mjs';
 import {createHash} from 'node:crypto';
-import {mkdir,readFile,rename,unlink} from 'node:fs/promises';
+import {mkdir,readFile,writeFile,rename,unlink} from 'node:fs/promises';
 import path from 'node:path';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -65,19 +65,45 @@ export class MuseAdapterV2 extends MuseAdapter {
     return {requested, video,busy,mediaIdentity,rejected:!video&&(imageRejected||museVideoRejection(responseText)),responseText:summarizeMuseReply(responseText)};
   }
 
-  async downloadImage(fileId){
-    const page=this.requirePage(),dialog=this.preview();
-    await dialog.waitFor({state:'visible',timeout:30000});
+  async downloadImage(fileId,element){
+    const page=this.requirePage();
     await mkdir(this.downloadsDir,{recursive:true});
-    const pending=page.waitForEvent('download',{timeout:45000});pending.catch(()=>{});
     const temp=path.join(this.downloadsDir,fileId+'.part');
+    const asset=await element.evaluate(node=>{
+      const image=node.tagName==='IMG'?node:node.querySelector('img');
+      return image?{url:image.currentSrc||image.src,width:image.naturalWidth,height:image.naturalHeight}:null;
+    });
+    // Muse's image viewer does not use the video preview dialog. Prefer the
+    // image resource already rendered in this exact assistant reply.
+    if(asset?.url&&asset.width>0&&asset.height>0){
+      let bytes;
+      if(asset.url.startsWith('data:image/')){
+        const comma=asset.url.indexOf(',');bytes=Buffer.from(asset.url.slice(comma+1),asset.url.slice(0,comma).endsWith(';base64')?'base64':'utf8');
+      }else if(asset.url.startsWith('blob:')){
+        bytes=Buffer.from(await page.evaluate(async url=>Array.from(new Uint8Array(await (await fetch(url)).arrayBuffer())),asset.url));
+      }else{
+        const url=new URL(asset.url);if(url.protocol!=='https:')throw Error('Địa chỉ ảnh kết quả không hợp lệ.');
+        const result=await page.request.get(url.href,{timeout:45000});
+        if(!result.ok())throw Error('Chưa tải được ảnh kết quả từ Muse.');
+        bytes=await result.body();
+      }
+      const format=imageFormat(bytes),target=path.join(this.downloadsDir,fileId+'.'+format.extension);
+      await writeFile(temp,bytes);await rename(temp,target);return {path:target};
+    }
+    const before=page.url();
     try{
-      await dialog.getByRole('button',{name:/^(Tải xuống|Download)$/i}).click();
+      await element.click();
+      const pending=page.waitForEvent('download',{timeout:45000});pending.catch(()=>{});
+      await page.getByRole('button',{name:/^(Tải xuống|Tải ảnh|Download|Download image)$/i}).click({timeout:30000});
       const download=await pending;await download.saveAs(temp);
       if(await download.failure())throw Error('Muse chưa tải xong ảnh.');
       const format=imageFormat(await readFile(temp)),target=path.join(this.downloadsDir,fileId+'.'+format.extension);
-      await rename(temp,target);await this.closePreview();return {path:target};
+      await rename(temp,target);return {path:target};
     }catch(error){await unlink(temp).catch(()=>{});throw error;}
+    finally{
+      await this.closePreview().catch(()=>{});
+      if(!await this.composer().isVisible().catch(()=>false))await page.goto(before,{waitUntil:'domcontentloaded'});
+    }
   }
 
   async beginJob(job) {
@@ -211,7 +237,7 @@ export class MuseAdapterV2 extends MuseAdapter {
         const identity=response.mediaIdentity||'media';
         if(response.busy||stableIdentity!==identity){stableIdentity=response.busy?null:identity;stableSince=Date.now();}
         const ready=!flexible||(!response.busy&&Date.now()-stableSince>=(this.mediaSettleMs??6000));
-        try{if(ready){await response.video.click();return kind==='image'?await this.downloadImage(`${job.id}-${scene.index}`):await this.downloadScene(`${job.id}-${scene.index}`);}}
+        try{if(ready){if(kind==='image')return await this.downloadImage(`${job.id}-${scene.index}`,response.video);await response.video.click();return await this.downloadScene(`${job.id}-${scene.index}`);}}
         finally{await response.video.dispose();}
       }else{stableIdentity=null;stableSince=0;}
       if(response.rejected&&!response.busy)throw Object.assign(Error(`Muse chưa giao ${kind==='image'?'ảnh':'video'}: ${response.responseText||'Dịch vụ từ chối thông số đã chọn.'}`),{code:'MUSE_OUTPUT_REJECTED',retryable:false});

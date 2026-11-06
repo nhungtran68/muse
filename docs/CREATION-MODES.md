@@ -23,6 +23,10 @@ Kết quả ảnh và video dùng chung bucket riêng `brand-videos` với chín
 
 Fixture và Muse thật là hai mức kiểm tra khác nhau. Kết quả thực tế phía Muse phụ thuộc khả năng tài khoản/model ở lần chạy; prompt không bảo đảm tuyệt đối khuôn mặt, giọng nói hoặc thời lượng.
 
+### Kiểm tra Muse thật ngày 2026-11-06
+
+- Job ảnh `ff632d35-f333-47d6-86f0-7256dbff8b02`: hoàn tất, PNG 1600 × 1600; thời hạn xóa do server đặt đúng 60 phút. Lượt thử đầu phát hiện viewer ảnh khác dialog video. Đã sửa để tải tài nguyên ảnh trong đúng phản hồi Muse và nhận lại bằng biên nhận cũ, không gửi lại yêu cầu tạo ảnh.
+
 ## Khôi phục
 
 Giữ migration bổ sung và dữ liệu. Dừng nhận yêu cầu mới, để worker 3.1.0 xử lý xong hoặc xác định trạng thái các job `video_free`/`image` trước khi khôi phục worker cũ; worker cũ chưa hiểu hai chế độ này. Web có thể khôi phục deployment trước. Không xóa bảng, volume, phiên đăng nhập hoặc file khách hàng.
