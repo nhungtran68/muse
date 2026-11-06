@@ -1,6 +1,7 @@
 import {createClient} from '@supabase/supabase-js';
 import {S3Client,PutObjectCommand,GetObjectCommand,HeadObjectCommand,DeleteObjectCommand} from '@aws-sdk/client-s3';
 import {getSignedUrl} from '@aws-sdk/s3-request-presigner';
+import {supabaseUrl as defaultSupabaseUrl,publishableKey as defaultPublishableKey} from '../worker/config.js';
 
 const VIDEO_BUCKET='brand-videos',REFERENCE_BUCKET='brand-references';
 const TYPES={
@@ -102,4 +103,6 @@ const configured=account&&process.env.R2_ACCESS_KEY_ID&&process.env.R2_SECRET_AC
 const s3=configured?new S3Client({region:'auto',endpoint:`https://${account}.r2.cloudflarestorage.com`,forcePathStyle:true,
   credentials:{accessKeyId:process.env.R2_ACCESS_KEY_ID,secretAccessKey:process.env.R2_SECRET_ACCESS_KEY},
   requestChecksumCalculation:'WHEN_REQUIRED',responseChecksumValidation:'WHEN_REQUIRED'}):null;
-export default createMediaHandler({s3,storageBucket:bucket,projectUrl:process.env.VITE_SUPABASE_URL,publicKey:process.env.VITE_SUPABASE_PUBLISHABLE_KEY});
+// The production site uses the existing public worker configuration when
+// VITE variables are absent; keep the gateway on the same Supabase project.
+export default createMediaHandler({s3,storageBucket:bucket,projectUrl:process.env.VITE_SUPABASE_URL||defaultSupabaseUrl,publicKey:process.env.VITE_SUPABASE_PUBLISHABLE_KEY||defaultPublishableKey});
