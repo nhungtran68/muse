@@ -3,6 +3,8 @@ import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {joinScenes,probeVideo,validateScene} from './ffmpeg.mjs';
 import {isSingleVideoScene} from '../shared/single-video-request.mjs';
+import {isFlexibleMediaJob} from '../shared/creation-modes.mjs';
+import {processSingleMediaJob} from './single-media.mjs';
 
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 function extension(bytes){
@@ -30,6 +32,7 @@ export async function processBrandScriptV3(job,{client,muse,workRoot,workerId,le
 }
 
 export async function processBrandJobV2(job,{client,muse,auditor,workRoot,workerId,leaseToken,retryDelayMs=3000}){
+  if(isFlexibleMediaJob(job))return processSingleMediaJob(job,{client,muse,workRoot,workerId,leaseToken});
   if(![2,3].includes(job.schema_version)||(job.schema_version===3&&(job.workflow_phase!=='video'||job.status!=='generating'||job.scene_seconds!==10))||!job.claim_token||!workerId||!leaseToken)throw Error('Thiếu quyền xử lý của yêu cầu.');
   if(job.schema_version===3&&(!Array.isArray(job.plan)||job.plan.length!==job.scene_count||job.plan.some((part,i)=>part.index!==i+1||part.seconds!==10||typeof part.dialogue!=='string'||!part.dialogue.trim())))throw Object.assign(Error('Kịch bản đã duyệt không hợp lệ. Cần khôi phục bản khách đã duyệt trước khi tạo video.'),{code:'INVALID_APPROVED_SCRIPT',retryable:false});
   const auth={p_id:job.id,p_worker:workerId,p_token:leaseToken,p_claim:job.claim_token};
@@ -68,6 +71,7 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
           console.log(`Yêu cầu ${job.id} · đoạn ${scene.index}/${job.scene_count} · lần tạo ${generation%3+1}/3${receipt?' · tiếp tục nhận kết quả':' · gửi Muse'}`);
           video=await muse.generateSceneV2(job,{...scene,generation},image,{
             receipt,
+            onConversation:ref=>updateJob({conversation_ref:ref}),
             onBeforeSend:async nextReceipt=>{await updateScene(scene.index,{status:'generating',submission_state:'sending',request_receipt:nextReceipt});receipt=nextReceipt;},
             onSubmitted:async()=>updateScene(scene.index,{submission_state:'sent'})
           });

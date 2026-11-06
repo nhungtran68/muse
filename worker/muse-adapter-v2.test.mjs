@@ -97,6 +97,27 @@ test('a saved receipt missing from chat is recoverable by polling only and never
     error.code==='SUBMISSION_NOT_FOUND'&&error.retryable===true&&error.message.includes('không gửi lại'));
 });
 
+test('free mode waits for the joined final video and never downloads an intermediate clip',async()=>{
+ const {adapter}=fixture(),job={id:'12345678-1234-1234-1234-123456789abc',creation_mode:'video_free',schema_version:2,scene_count:1,scene_seconds:null,content:'Tạo video dài ba mươi giây.'};
+ const scene={index:1,generation:0,prompt:job.content,action:'single_free_video_request'};
+ const key='BRAND_12345678_1234_1234_1234_123456789abc_SCENE_1_GEN_0';
+ let reads=0,clicked=[];
+ adapter.sceneResponse=async(_key,options)=>{assert.equal(options.finalOnly,true);reads++;return {requested:true,busy:reads===1,mediaIdentity:reads===1?'intermediate':'final',video:{click:async()=>clicked.push(reads===1?'intermediate':'final'),dispose:async()=>{}}};};
+ adapter.cleanComposer=async()=>assert.fail('A saved request must not be resubmitted');adapter.assertConnected=async()=>{};
+ adapter.downloadScene=async()=>({path:'joined-30s.mp4'});adapter.pollMs=1;adapter.mediaSettleMs=0;adapter.flexibleTimeoutMs=1000;
+ const result=await adapter.generateSceneV2(job,scene,null,{receipt:{key}});assert.equal(result.path,'joined-30s.mp4');assert.deepEqual(clicked,['final']);
+});
+
+test('media selection skips uploaded references, stays in the matching reply, and picks the final joined video',async t=>{
+ const browser=await chromium.launch({headless:true,...(installedBrowserExecutable()?{executablePath:installedBrowserExecutable()}:{})});t.after(()=>browser.close());
+ const page=await browser.newPage();await page.setContent(`<div class="hatch-chat-groupable-bubble bg-chat-user-bubble">KEY.<button aria-label="Mở hình ảnh" data-id="input"></button></div><div class="hatch-chat-groupable-bubble"><button aria-label="Mở video" data-id="clip"></button><button aria-label="Mở video" data-id="joined"></button><button aria-label="Mở hình ảnh" data-id="generated"></button></div><div class="hatch-chat-groupable-bubble bg-chat-user-bubble">OTHER.</div><div class="hatch-chat-groupable-bubble"><button aria-label="Mở video" data-id="another-user"></button></div><button>Stop task</button>`);
+ const adapter=new MuseAdapterV2('','');adapter.requirePage=()=>page;
+ const video=await adapter.sceneResponse('KEY',{kind:'video',finalOnly:true});assert.equal(await video.video.getAttribute('data-id'),'joined');assert.equal(video.busy,true);await video.video.dispose();
+ const image=await adapter.sceneResponse('KEY',{kind:'image',finalOnly:true});assert.equal(await image.video.getAttribute('data-id'),'generated');await image.video.dispose();
+ await page.locator('[data-id="generated"]').evaluate(node=>node.remove());
+ const noImage=await adapter.sceneResponse('KEY',{kind:'image',finalOnly:true});assert.equal(noImage.video,null,'an uploaded reference is never returned as the generated image');
+});
+
 test('a new single video request persists the Muse receipt before sending and marks it sent after acknowledgement',async()=>{
   const {adapter,page}=fixture(),job={id:'12345678-1234-1234-1234-123456789abc',schema_version:2,scene_seconds:10,content:'Kể về khu vườn vào buổi sớm.'};
   const scene={index:1,seconds:10,prompt:job.content,dialogue:'',action:'single_request'};

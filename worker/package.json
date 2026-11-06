@@ -1,7 +1,7 @@
 {
   "name": "muse-brand-worker",
   "private": true,
-  "version": "3.0.9",
+  "version": "3.1.0",
   "type": "module",
   "scripts": {
     "start": "node worker-v2.mjs",

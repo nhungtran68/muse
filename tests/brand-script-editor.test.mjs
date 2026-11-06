@@ -37,9 +37,13 @@ test('browser sends one complete video request, retries a failed job safely and 
    if(delayInitialList){delayInitialList=false;await new Promise(resolve=>setTimeout(resolve,500));}
    return route.fulfill(json(job?[{...job,brand_scenes:job.scene? [job.scene]:[]}]:[]));
   }
-  if(url.pathname==='/rest/v1/rpc/submit_single_video_job'){
-   const args=request.postDataJSON();calls.push({name:'submit',args});
+  if(url.pathname==='/rest/v1/rpc/submit_single_media_job'){
+   const args=request.postDataJSON();args.p_seconds=args.p_mode==='video_10s'?10:null;calls.push({name:'submit',args});
    job={id,user_id:owner,content:args.p_content,scene_count:1,scene_seconds:args.p_seconds,status:'uploading',schema_version:2,workflow_phase:'video',reference_path:`${owner}/${id}/reference`,reference_sha256:args.p_reference_sha256,plan:[{index:1,seconds:args.p_seconds,prompt:args.p_content,dialogue:'',action:'single_request'}],created_at:new Date().toISOString(),attempt:0,max_attempts:3,retryable:true,scene:{scene_index:1,prompt:args.p_content,dialogue:'',action:'single_request',planned_seconds:args.p_seconds,status:'waiting',submission_state:'not_sent',generation:0}};
+   job.creation_mode=args.p_mode;
+   job.scene.action=args.p_mode==='image'?'single_image_request':args.p_mode==='video_free'?'single_free_video_request':'single_request';
+   job.plan[0].action=job.scene.action;
+   if(!args.p_reference_sha256){job.reference_path=null;job.status='queued';}
    return route.fulfill(json(job));
   }
   if(url.pathname.startsWith('/storage/v1/object/brand-references/')&&request.method()==='POST'){
@@ -48,22 +52,24 @@ test('browser sends one complete video request, retries a failed job safely and 
   if(url.pathname==='/rest/v1/rpc/queue_brand_job'){
    calls.push({name:'queue',args:request.postDataJSON()});job.status='queued';return route.fulfill(json(job));
   }
-  if(url.pathname==='/rest/v1/rpc/retry_single_video_job'){
+  if(url.pathname==='/rest/v1/rpc/retry_single_media_job'){
    calls.push({name:'retry',args:request.postDataJSON()});job.status='queued';job.error=null;job.error_code=null;job.scene={...job.scene,status:'waiting',submission_state:'not_sent',request_receipt:null,generation:job.scene.generation+1};return route.fulfill(json(job));
   }
   if(url.pathname.startsWith('/storage/v1/object/sign/brand-references/'))return route.fulfill(json({signedURL:'/object/sign/reference.png?token=local-test'}));
   if(url.pathname==='/storage/v1/object/sign/reference.png')return route.fulfill({status:200,contentType:'image/png',headers:{'access-control-allow-origin':'*'},body:process.env.UI_EVIDENCE_PNG?await fs.readFile(process.env.UI_EVIDENCE_PNG):previewPng});
-  if(url.pathname.startsWith('/storage/v1/object/sign/brand-videos/'))return route.fulfill(json({signedURL:'/object/sign/final.mp4?token=local-test'}));
+  if(url.pathname.startsWith('/storage/v1/object/sign/brand-videos/'))return route.fulfill(json({signedURL:job?.creation_mode==='image'?'/object/sign/final.png?token=local-test':'/object/sign/final.mp4?token=local-test'}));
+  if(url.pathname==='/storage/v1/object/sign/final.png'||url.pathname.startsWith('/storage/v1/object/brand-videos/')||url.pathname.startsWith('/storage/v1/object/authenticated/brand-videos/'))return route.fulfill({status:200,contentType:'image/png',headers:{'access-control-allow-origin':'*'},body:previewPng});
   if(url.pathname==='/storage/v1/object/sign/final.mp4')return route.fulfill({status:200,contentType:'video/mp4',headers:{'access-control-allow-origin':'*'},body:process.env.UI_EVIDENCE_VIDEO?await fs.readFile(process.env.UI_EVIDENCE_VIDEO):Buffer.from([0,0,0,24,102,116,121,112,109,112,52,50])});
   return route.fulfill(json({message:'Unexpected local test route: '+url.pathname},404));
  });
  await page.goto(`http://127.0.0.1:${port}`);
  await page.locator('#auth-email').fill('one@example.test');await page.locator('#auth-password').fill('local-test-password-123');await page.locator('#auth-form button[type=submit]').click();
  await page.locator('#create-form').waitFor();
- await page.locator('#jobs-list .empty').getByText('Đang tải video…').waitFor();
- await page.locator('#jobs-list').getByText('Chưa có video nào').waitFor();
+ await page.locator('#jobs-list').getByText('Chưa có kết quả nào').waitFor();
  assert.equal(await page.locator('#scene-count').count(),0,'the new composer has no scene-count or multi-step controls');
  assert.equal(await page.getByRole('button',{name:/Tạo kịch bản/}).count(),0);
+ assert.deepEqual(await page.locator('#creation-mode option').allTextContents(),['Video 10 giây','Video tự do','Tạo ảnh']);
+ assert.equal(await page.locator('#creation-mode').inputValue(),'video_10s');
  if(process.env.UI_EVIDENCE_DIR){
   await fs.mkdir(process.env.UI_EVIDENCE_DIR,{recursive:true});
   await page.waitForTimeout(50);
@@ -125,6 +131,36 @@ test('browser sends one complete video request, retries a failed job safely and 
  if(process.env.UI_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.UI_EVIDENCE_DIR,'success-video-1440x900.png')});
  assert.equal(await page.locator('.video-slot video').count(),1,'completed output is displayed in the web app');
  assert.equal((await page.locator('.video-slot video').getAttribute('src')).includes('final.mp4'),true);
+ for(const mode of ['video_free','image']){
+  const content=mode==='image'?'Tạo ảnh một khu vườn dưới nắng sớm, màu nước.':'Tạo video khu vườn dài 30 giây, khung hình ngang 16:9.';
+  await page.locator('#content').fill(content);await page.locator('#creation-mode').selectOption(mode);
+  assert.equal(await page.locator('#content').inputValue(),content,'changing mode preserves the draft');
+  assert.equal(await page.locator('#reference').getAttribute('required'),null,'the two new modes allow text-only requests');
+  const count=calls.filter(call=>call.name==='submit').length;
+  await page.locator('#create-form').evaluate(form=>{form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));});
+  await page.locator('#jobs-list').getByText('Đang chờ',{exact:true}).waitFor();
+  assert.equal(calls.filter(call=>call.name==='submit').length,count+1,'repeated presses submit once');
+  const args=calls.filter(call=>call.name==='submit').at(-1).args;
+  assert.equal(args.p_mode,mode);assert.equal(args.p_content,content);assert.equal(args.p_reference_sha256,null);assert.equal(job.scene_seconds,null);
+  assert.equal(calls.filter(call=>call.name==='image-upload').length,1,'text-only requests do not upload another job’s reference');
+  job={...job,status:'done',final_path:`${owner}/${id}/final.${mode==='image'?'png':'mp4'}`,final_probe:{duration:mode==='image'?null:30,width:1280,height:720},retention_status:'active',output_expires_at:new Date(Date.now()+3600000).toISOString()};
+  await page.reload();await page.getByRole('button',{name:mode==='image'?'Xem ảnh':'Xem video',exact:true}).click();
+  await page.locator(mode==='image'?'.video-slot .result-image':'.video-slot video').waitFor();
+  if(mode==='image'){
+   const pendingDownload=page.waitForEvent('download');await page.getByRole('button',{name:'Tải ảnh',exact:true}).click();
+   const download=await pendingDownload;assert.match(download.suggestedFilename(),/\.png$/,'image downloads keep the correct file type');
+  }else assert.match(await page.locator('.job-main').innerText(),/Video tự do · 30 giây/);
+  if(process.env.UI_EVIDENCE_DIR){
+   await page.locator('#creation-mode').selectOption(mode);
+   for(const width of [360,390,1440]){
+    await page.setViewportSize({width,height:844});await page.waitForTimeout(300);await page.evaluate(()=>window.scrollTo(0,0));
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),width);
+    if(width<600)assert.ok(await page.locator('.sidebar').evaluate(node=>node.getBoundingClientRect().right<=0),'closed navigation does not cover mobile content');
+    assert.ok(await page.locator('#creation-mode').evaluate(node=>node.getBoundingClientRect().height>=44));
+    await page.screenshot({path:path.join(process.env.UI_EVIDENCE_DIR,`${mode}-${width}.png`)});
+   }
+  }
+ }
  isApproved=false;await page.locator('#signout').click();await page.locator('#auth-form').waitFor();
  await page.locator('#auth-email').fill('one@example.test');await page.locator('#auth-password').fill('local-test-password-123');await page.locator('#auth-form button[type=submit]').click();
  await page.getByRole('heading',{name:'Tài khoản đang chờ duyệt'}).waitFor();

@@ -2,7 +2,11 @@ import {MuseAdapter} from './muse-adapter.mjs';
 import {buildStoryboardPrompt,parseMarkedJson,validateStoryboard} from '../shared/storyboard.mjs';
 import {clipRequest} from '../shared/brand-video-prompt.mjs';
 import {buildSingleVideoPrompt,isSingleVideoScene} from '../shared/single-video-request.mjs';
+import {buildFlexibleMediaPrompt,isFlexibleMediaJob} from '../shared/creation-modes.mjs';
+import {imageFormat} from './single-media.mjs';
 import {createHash} from 'node:crypto';
+import {mkdir,readFile,rename,unlink} from 'node:fs/promises';
+import path from 'node:path';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
@@ -23,32 +27,57 @@ export function museVideoRejection(text){
 // Each job needs its own conversation. If Muse changes its controls, stop instead
 // of reusing another customer's conversation.
 export class MuseAdapterV2 extends MuseAdapter {
-  async sceneResponse(requestKey) {
+  async sceneResponse(requestKey,{kind='video',finalOnly=false}={}) {
     const page = this.requirePage();
     const elements = await page.getByRole('button', {
-      name: /^(Mở|Xem) video\b|^(Open|View|Play) (?:animated )?video\b/i
+      name: kind==='image'?/^(Mở|Xem) (?:hình )?ảnh\b|^(Open|View) (?:generated )?(?:image|photo|picture)\b/i:/^(Mở|Xem) video\b|^(Open|View|Play) (?:animated )?video\b/i
     }).elementHandles();
-    const state = await page.evaluateHandle(({elements, key}) => {
+    if(kind==='image')elements.push(...await page.locator('.hatch-chat-groupable-bubble:not(.bg-chat-user-bubble) img').elementHandles());
+    const state = await page.evaluateHandle(({elements, key, kind, finalOnly}) => {
       const users = [...document.querySelectorAll('.hatch-chat-groupable-bubble.bg-chat-user-bubble')];
       const matches = users.filter(element => element.textContent.includes(key + '.'));
       const anchor = matches.length === 1 ? matches[0] : null;
       const next = anchor && users[users.indexOf(anchor) + 1];
       const follows = (left, right) => Boolean(left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING);
       const inReply = element => anchor && follows(anchor, element) && (!next || follows(element, next));
-      const video = elements.find(element => element.isConnected && !element.closest('[role="dialog"]') && inReply(element));
+      const candidates=elements.filter(element=>element.isConnected&&!element.closest('[role="dialog"],.bg-chat-user-bubble')&&inReply(element)
+        &&(element.tagName!=='IMG'||(element.naturalWidth>=256&&element.naturalHeight>=256)));
+      // A free video may expose intermediate clips before Muse finishes joining.
+      // Use the final output in this request's reply, after the task has stopped.
+      candidates.sort((a,b)=>a===b?0:follows(a,b)?-1:1);
+      const video=finalOnly?candidates.at(-1):candidates[0];
       const replies = [...document.querySelectorAll('.hatch-chat-groupable-bubble:not(.bg-chat-user-bubble)')].filter(inReply);
       const text = replies.map(element => element.textContent).join('\n');
-      return {requested: Boolean(anchor), video: video || null, text};
-    }, {elements, key: requestKey});
+      const identity=video?(video.getAttribute('src')||video.querySelector('img,video')?.getAttribute('src')||video.getAttribute('aria-label')||'media')+'|'+candidates.length:null;
+      return {requested: Boolean(anchor), video: video || null, text, identity};
+    }, {elements, key: requestKey,kind,finalOnly});
     await Promise.all(elements.map(element => element.dispose()));
     const requestedHandle = await state.getProperty('requested');
     const textHandle = await state.getProperty('text');
     const requested = await requestedHandle.jsonValue(), responseText = await textHandle.jsonValue();
     await requestedHandle.dispose(); await textHandle.dispose();
+    const identityHandle=await state.getProperty('identity'),mediaIdentity=await identityHandle.jsonValue();await identityHandle.dispose();
     const handle = await state.getProperty('video'), video = handle.asElement();
     if (!video) await handle.dispose();
     await state.dispose();
-    return {requested, video, rejected:!video&&museVideoRejection(responseText),responseText:summarizeMuseReply(responseText)};
+    const busy=finalOnly?await page.getByRole('button',{name:/^(Dừng nhiệm vụ|Stop task)$/i}).isVisible().catch(()=>false):false;
+    const imageRejected=kind==='image'&&/(?:(?:không|chưa)\s+thể\s+(?:tạo|xuất|giao)(?:\s+được)?\s+(?:hình\s+)?ảnh|(?:cannot|unable to)\s+(?:create|generate)\s+(?:an?\s+)?image)/iu.test(responseText);
+    return {requested, video,busy,mediaIdentity,rejected:!video&&(imageRejected||museVideoRejection(responseText)),responseText:summarizeMuseReply(responseText)};
+  }
+
+  async downloadImage(fileId){
+    const page=this.requirePage(),dialog=this.preview();
+    await dialog.waitFor({state:'visible',timeout:30000});
+    await mkdir(this.downloadsDir,{recursive:true});
+    const pending=page.waitForEvent('download',{timeout:45000});pending.catch(()=>{});
+    const temp=path.join(this.downloadsDir,fileId+'.part');
+    try{
+      await dialog.getByRole('button',{name:/^(Tải xuống|Download)$/i}).click();
+      const download=await pending;await download.saveAs(temp);
+      if(await download.failure())throw Error('Muse chưa tải xong ảnh.');
+      const format=imageFormat(await readFile(temp)),target=path.join(this.downloadsDir,fileId+'.'+format.extension);
+      await rename(temp,target);await this.closePreview();return {path:target};
+    }catch(error){await unlink(temp).catch(()=>{});throw error;}
   }
 
   async beginJob(job) {
@@ -127,12 +156,14 @@ export class MuseAdapterV2 extends MuseAdapter {
     throw Object.assign(Error(`Chưa tạo được kịch bản hợp lệ: ${issue}`),{code:'STORYBOARD_INVALID'});
   }
 
-  async generateSceneV2(job,scene,imagePath,{receipt,onBeforeSend,onSubmitted}={}){
+  async generateSceneV2(job,scene,imagePath,{receipt,onBeforeSend,onSubmitted,onConversation}={}){
     const page=this.requirePage();
+    const flexible=isFlexibleMediaJob(job),kind=job.creation_mode==='image'?'image':'video';
+    const readResponse=()=>this.sceneResponse(key,flexible?{kind,finalOnly:true}:{});
     let durableReceipt=Boolean(receipt);
     const key=`BRAND_${job.id.replaceAll('-','_')}_SCENE_${scene.index}_GEN_${scene.generation||0}`;
     if(receipt&&receipt.key!==key)throw Object.assign(Error('Biên nhận cảnh không khớp lần tạo; cần kiểm tra trước khi tiếp tục.'),{code:'UNCERTAIN_SUBMISSION',retryable:false});
-    let videoPrompt=job.schema_version===3?clipRequest(job,scene):null;
+    let videoPrompt=flexible?buildFlexibleMediaPrompt(job,scene,key):job.schema_version===3?clipRequest(job,scene):null;
     let promptHash=videoPrompt?createHash('sha256').update(videoPrompt).digest('hex'):null;
     if(receipt?.prompt_sha256&&receipt.prompt_sha256!==promptHash&&job.schema_version===3){
       // Resume an already sent request with its original prompt hash. Never
@@ -143,38 +174,49 @@ export class MuseAdapterV2 extends MuseAdapter {
     if(receipt?.prompt_sha256&&receipt.prompt_sha256!==promptHash)throw Object.assign(Error('Mẫu prompt hoặc lời thoại đã thay đổi sau lần gửi trước; cần kiểm tra.'),{code:'UNCERTAIN_SUBMISSION',retryable:false});
     await this.closePreview();
     await this.composer().waitFor({state:'visible',timeout:this.composerTimeoutMs});
-    let response=await this.sceneResponse(key);
+    let response=await readResponse();
     if (receipt && !response.requested) {
       // The composer may appear before the saved chat messages load.
       const historyDeadline = Date.now() + Math.min(this.composerTimeoutMs, 30000);
       while (!response.requested && Date.now() < historyDeadline) {
         await sleep(Math.min(this.pollMs, historyDeadline - Date.now()));
-        response = await this.sceneResponse(key);
+        response = await readResponse();
       }
     }
     if(!response.requested){
       // A saved receipt means Enter may already have been pressed. Never resend.
       if(receipt)throw Object.assign(Error(`Không tìm thấy yêu cầu cảnh ${scene.index} đã gửi; có thể tiếp tục kiểm tra biên nhận cũ, không gửi lại.`),{code:'SUBMISSION_NOT_FOUND',retryable:true});
       const input=await this.cleanComposer();
-      await this.attachReference(imagePath);
+      if(imagePath)await this.attachReference(imagePath);
       const dialogue=scene.dialogue?`Đọc lời thoại tiếng Việt đúng nguyên văn, không thêm hoặc bớt. Nếu không có nhân vật trong hình, dùng giọng thuyết minh. Đọc chậm tự nhiên, trải đều lời trong khoảng 65–90% thời lượng cảnh, bắt đầu sớm, không dồn lời rồi kết thúc quá sớm, không kéo dài âm hoặc lặp từ: “${scene.dialogue}”.`: 'Không có lời thoại hoặc giọng nói.';
-      const requestText=videoPrompt?`${key}. ${videoPrompt}`:isSingleVideoScene(scene)?buildSingleVideoPrompt(job,scene,key):`${key}. Tạo đúng MỘT video độc lập, dùng ảnh đính kèm, ${job.scene_seconds} giây, khổ dọc 9:16. Không dùng dữ liệu từ khách hàng khác hoặc cuộc trò chuyện khác. Không thêm chữ, không đăng mạng xã hội. Nếu không hỗ trợ thời lượng, báo lỗi thay vì tự đổi. ${dialogue} Hành động và biểu cảm: ${scene.action}. Mô tả cảnh: ${scene.prompt}`;
+      const requestText=flexible?videoPrompt:videoPrompt?`${key}. ${videoPrompt}`:isSingleVideoScene(scene)?buildSingleVideoPrompt(job,scene,key):`${key}. Tạo đúng MỘT video độc lập, dùng ảnh đính kèm, ${job.scene_seconds} giây, khổ dọc 9:16. Không dùng dữ liệu từ khách hàng khác hoặc cuộc trò chuyện khác. Không thêm chữ, không đăng mạng xã hội. Nếu không hỗ trợ thời lượng, báo lỗi thay vì tự đổi. ${dialogue} Hành động và biểu cảm: ${scene.action}. Mô tả cảnh: ${scene.prompt}`;
       await input.fill(requestText);
       await sleep(400);
       if(await input.inputValue()!==requestText)throw Object.assign(Error('Ô nhập Muse đã tải lại trước khi gửi; không gửi lời thoại có thể bị thay đổi.'),{code:'MUSE_COMPOSER_RELOADED'});
       await onBeforeSend({key,url:page.url(),prepared_at:new Date().toISOString(),...(promptHash?{prompt_sha256:promptHash,script_revision:job.script_revision,template_version:job.video_prompt_version}:{})});
       durableReceipt=true;
       await input.press('Enter');
+      if(onConversation){
+        await page.waitForURL(url=>/^\/thread\/[0-9a-f-]{36}$/i.test(url.pathname),{timeout:60000,waitUntil:'commit'});
+        await onConversation({url:page.url()});
+      }
     }
-    const until=Date.now()+this.sceneTimeoutMs;
+    const until=Date.now()+(flexible?(this.flexibleTimeoutMs??Math.max(this.sceneTimeoutMs,30*60*1000)):this.sceneTimeoutMs);
     let submissionAcknowledged=false;
+    let stableIdentity=null,stableSince=0;
     while(true){
       await this.assertConnected();
       if(response.requested&&durableReceipt&&!submissionAcknowledged){submissionAcknowledged=true;await onSubmitted?.();}
-      if(response.video){try{await response.video.click();return await this.downloadScene(`${job.id}-${scene.index}`);}finally{await response.video.dispose();}}
-      if(response.rejected)throw Object.assign(Error(`Muse không giao video cảnh ${scene.index}: ${response.responseText||'Dịch vụ từ chối thông số đã chọn.'}`),{code:'MUSE_OUTPUT_REJECTED',retryable:false});
+      if(response.video){
+        const identity=response.mediaIdentity||'media';
+        if(response.busy||stableIdentity!==identity){stableIdentity=response.busy?null:identity;stableSince=Date.now();}
+        const ready=!flexible||(!response.busy&&Date.now()-stableSince>=(this.mediaSettleMs??6000));
+        try{if(ready){await response.video.click();return kind==='image'?await this.downloadImage(`${job.id}-${scene.index}`):await this.downloadScene(`${job.id}-${scene.index}`);}}
+        finally{await response.video.dispose();}
+      }else{stableIdentity=null;stableSince=0;}
+      if(response.rejected&&!response.busy)throw Object.assign(Error(`Muse chưa giao ${kind==='image'?'ảnh':'video'}: ${response.responseText||'Dịch vụ từ chối thông số đã chọn.'}`),{code:'MUSE_OUTPUT_REJECTED',retryable:false});
       const remaining=until-Date.now();if(remaining<=0)break;
-      await sleep(Math.min(this.pollMs,remaining));response=await this.sceneResponse(key);
+      await sleep(Math.min(this.pollMs,remaining));response=await readResponse();
     }
     throw Object.assign(Error(`Chưa nhận được video cảnh ${scene.index}; có thể thử lấy tiếp kết quả đã gửi, không tạo trùng.${response.responseText?' Muse trả lời: '+response.responseText:''}`),{code:'MUSE_TIMEOUT',retryable:true});
   }
