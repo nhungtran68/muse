@@ -47,7 +47,7 @@ test('browser sends one complete video request, retries a failed job safely and 
    return route.fulfill(json(job));
   }
   if(url.pathname.startsWith('/storage/v1/object/brand-references/')&&request.method()==='POST'){
-   calls.push({name:'image-upload',contentType:request.headers()['content-type']});return route.fulfill(json({Key:'reference'}));
+   calls.push({name:'image-upload',contentType:request.headers()['content-type'],hasJpegPart:request.postDataBuffer()?.includes(Buffer.from('Content-Type: image/jpeg'))});return route.fulfill(json({Key:'reference'}));
   }
   if(url.pathname==='/rest/v1/rpc/queue_brand_job'){
    calls.push({name:'queue',args:request.postDataJSON()});job.status='queued';return route.fulfill(json(job));
@@ -114,6 +114,23 @@ test('browser sends one complete video request, retries a failed job safely and 
  assert.match(await page.locator('#notice').innerText(),/một yêu cầu hoàn chỉnh/);
  assert.equal(job.scene_count,1);assert.equal(job.plan.length,1);assert.equal(job.scene.action,'single_request');
 
+ // A blocked upload leaves this same job waiting for its original image.
+ // The stored hash belongs to the normalized JPEG, not the customer's PNG.
+ job={...job,status:'uploading'};
+ await page.reload();await page.locator('.resume-file').waitFor();
+ const wrongBytes=Buffer.from(await page.evaluate(async()=>{
+  const canvas=document.createElement('canvas');canvas.width=10;canvas.height=10;canvas.getContext('2d').fillRect(0,0,10,10);
+  const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));return [...new Uint8Array(await blob.arrayBuffer())];
+ }));
+ await page.locator('.resume-file').setInputFiles({name:'wrong.png',mimeType:'image/png',buffer:wrongBytes});
+ await page.getByText(/Ảnh không khớp ảnh đã chọn ban đầu/).waitFor();
+ assert.equal(calls.filter(call=>call.name==='image-upload').length,1,'a different image must never be uploaded');
+ await page.locator('.resume-file').setInputFiles({name:'reference.png',mimeType:'image/png',buffer:imageBytes});
+ await page.locator('#jobs-list').getByText('Đang chờ',{exact:true}).waitFor();
+ assert.equal(calls.filter(call=>call.name==='image-upload').length,2,'the original normalized image can resume the existing job');
+ assert.equal(calls.filter(call=>call.name==='image-upload').at(-1).hasJpegPart,true,'the resumed upload contains the normalized JPEG');
+ assert.equal(calls.filter(call=>call.name==='submit').length,1,'resuming the image does not create another job');
+
  job={...job,status:'error',error:'Muse không giao video: tác vụ bị từ chối.',error_code:'MUSE_OUTPUT_REJECTED',retryable:true,scene:{...job.scene,status:'error',error:'Muse không giao video.',error_code:'MUSE_OUTPUT_REJECTED'}};
  await page.reload();await page.getByRole('button',{name:'Gửi lại video'}).waitFor();
  if(process.env.UI_EVIDENCE_DIR){await page.getByRole('button',{name:'Gửi lại video'}).scrollIntoViewIfNeeded();await page.screenshot({path:path.join(process.env.UI_EVIDENCE_DIR,'error-retry-1440x900.png')});}
@@ -142,7 +159,7 @@ test('browser sends one complete video request, retries a failed job safely and 
   assert.equal(calls.filter(call=>call.name==='submit').length,count+1,'repeated presses submit once');
   const args=calls.filter(call=>call.name==='submit').at(-1).args;
   assert.equal(args.p_mode,mode);assert.equal(args.p_content,content);assert.equal(args.p_reference_sha256,null);assert.equal(job.scene_seconds,null);
-  assert.equal(calls.filter(call=>call.name==='image-upload').length,1,'text-only requests do not upload another job’s reference');
+  assert.equal(calls.filter(call=>call.name==='image-upload').length,2,'text-only requests do not upload another job’s reference');
   job={...job,status:'done',final_path:`${owner}/${id}/final.${mode==='image'?'png':'mp4'}`,final_probe:{duration:mode==='image'?null:30,width:1280,height:720},retention_status:'active',output_expires_at:new Date(Date.now()+3600000).toISOString()};
   await page.reload();await page.getByRole('button',{name:mode==='image'?'Xem ảnh':'Xem video',exact:true}).click();
   await page.locator(mode==='image'?'.video-slot .result-image':'.video-slot video').waitFor();
