@@ -2,6 +2,8 @@ import {createHash} from 'node:crypto';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {probeVideo,joinScenes} from './ffmpeg.mjs';
+import {assertGeneratedMediaSize} from '../shared/media-limits.mjs';
+import {downloadMedia,uploadMedia} from '../shared/media-storage.mjs';
 
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 export function imageFormat(bytes){
@@ -25,8 +27,8 @@ export async function processSingleMediaJob(job,{client,muse,workRoot,workerId,l
   const dir=path.join(workRoot,job.id,job.claim_token);await mkdir(dir,{recursive:true});
   let image=null;
   if(job.reference_path){
-    const result=await client.storage.from('brand-references').download(job.reference_path);if(result.error)throw result.error;
-    const bytes=Buffer.from(await result.data.arrayBuffer());
+    const result=await downloadMedia(client,{provider:job.reference_storage_provider,bucket:'brand-references',path:job.reference_path,jobId:job.id,origin:process.env.MUSE_MEDIA_GATEWAY_ORIGIN});
+    const bytes=Buffer.from(await result.arrayBuffer());
     if(hash(bytes)!==job.reference_sha256)throw Object.assign(Error('Ảnh tham chiếu không khớp yêu cầu ban đầu.'),{code:'REFERENCE_MISMATCH',retryable:false});
     image=path.join(dir,'reference.'+imageFormat(bytes).extension);await writeFile(image,bytes);
   }
@@ -69,10 +71,10 @@ export async function processSingleMediaJob(job,{client,muse,workRoot,workerId,l
       const playable=path.join(dir,'playable.mp4');probe=await joinScenes([file],playable,probe.duration);file=playable;bytes=await readFile(file);
     }
   }
-  if(bytes.length>50*1024*1024)throw Object.assign(Error('Kết quả lớn hơn giới hạn lưu 50 MB hiện tại. Hãy giảm độ dài hoặc độ phân giải rồi gửi yêu cầu mới.'),{code:'MEDIA_TOO_LARGE',retryable:false});
+  assertGeneratedMediaSize(bytes.length);
   const key=`${job.user_id}/${job.id}/${job.claim_token}/result.${format.extension}`;
   try{
-    const saved=await client.storage.from('brand-videos').upload(key,bytes,{contentType:format.contentType,upsert:false});if(saved.error)throw saved.error;
+    await uploadMedia(client,{provider:job.storage_provider,bucket:'brand-videos',path:key,jobId:job.id,origin:process.env.MUSE_MEDIA_GATEWAY_ORIGIN,contentType:format.contentType,data:bytes});
     await rpc('complete_single_media_job',{...auth,p_path:key,p_sha256:hash(bytes),p_probe:{...probe,kind,content_type:format.contentType,duration:isImage?null:probe.duration}});
   }catch(error){
     await update({status:'error',error_code:'MUSE_TIMEOUT',error:'Đã nhận kết quả Muse nhưng chưa lưu xong. Có thể tiếp tục lấy kết quả cũ mà không gửi lại.'});

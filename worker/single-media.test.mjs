@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {mkdtemp,readFile,rm} from 'node:fs/promises';
+import {mkdtemp,readFile,rm,truncate} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
@@ -38,4 +38,14 @@ test('a timed-out free request retains its receipt and never completes or upload
  const muse={beginJob:async()=>({url:'https://muse.ai/thread/'+randomUUID()}),async generateSceneV2(_j,_s,_i,{receipt}){assert.equal(receipt.key,'original-request');throw Object.assign(Error('Still rendering'),{code:'MUSE_TIMEOUT',retryable:true});}};
  await assert.rejects(processSingleMediaJob(job,{client,muse,workRoot:root,workerId:randomUUID(),leaseToken:randomUUID()}),{code:'MUSE_TIMEOUT'});
  assert.equal(scene.request_receipt.key,'original-request');assert.equal(scene.status,'error');assert.equal(objects.size,0);assert.equal(calls.some(call=>call.name==='complete_single_media_job'),false);
+});
+
+test('a valid 75 MiB MP4 passes the new application limit and reaches storage once',async t=>{
+ const root=await mkdtemp(path.join(tmpdir(),'muse-75mb-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const file=await mediaFile(root,'video');await truncate(file,75*1024*1024);
+ const {job,client,objects,calls}=fixture('video_free');let requests=0;
+ const muse={beginJob:async()=>({url:'https://muse.ai/thread/'+randomUUID()}),async generateSceneV2(){requests++;return {path:file};}};
+ await processSingleMediaJob(job,{client,muse,workRoot:root,workerId:randomUUID(),leaseToken:randomUUID()});
+ assert.equal(requests,1);assert.equal(objects.size,1);assert.equal([...objects.values()][0].data.length,75*1024*1024);
+ assert.equal(calls.filter(call=>call.name==='complete_single_media_job').length,1);
 });
