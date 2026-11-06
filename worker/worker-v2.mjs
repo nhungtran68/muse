@@ -67,6 +67,7 @@ try{
     }
     while(!lost&&!(await renew()))await sleep(5000);
     if(lost)throw Error('Không thể giữ quyền worker.');
+    await call('register_r2_worker',{p_worker:workerId,p_token:token});
     timer=setInterval(()=>void renew(),20000);
     safetyTimer=setInterval(()=>{if(!lost&&!leaseGuard.current())void stopForLease(Error('Quyền worker sắp hết hạn và chưa gia hạn được.'));},5000);
     await startupStatus('ready');

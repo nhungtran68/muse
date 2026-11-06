@@ -5,6 +5,7 @@ import {joinScenes,probeVideo,validateScene} from './ffmpeg.mjs';
 import {isSingleVideoScene} from '../shared/single-video-request.mjs';
 import {isFlexibleMediaJob} from '../shared/creation-modes.mjs';
 import {processSingleMediaJob} from './single-media.mjs';
+import {downloadMedia,uploadMedia} from '../shared/media-storage.mjs';
 
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 function extension(bytes){
@@ -15,14 +16,14 @@ function extension(bytes){
   throw Error('Ảnh tham chiếu sai định dạng.');
 }
 async function rpc(client,name,args){const result=await client.rpc(name,args);if(result.error)throw result.error;return result.data;}
-async function download(client,bucket,key){const result=await client.storage.from(bucket).download(key);if(result.error)throw result.error;return Buffer.from(await result.data.arrayBuffer());}
-async function upload(client,key,file){const result=await client.storage.from('brand-videos').upload(key,await readFile(file),{contentType:'video/mp4',upsert:false});if(result.error)throw result.error;}
+async function download(client,bucket,key,job){const provider=bucket==='brand-references'?job.reference_storage_provider:job.storage_provider;const file=await downloadMedia(client,{provider,bucket,path:key,jobId:job.id,origin:process.env.MUSE_MEDIA_GATEWAY_ORIGIN});return Buffer.from(await file.arrayBuffer());}
+async function upload(client,key,file,job){await uploadMedia(client,{provider:job.storage_provider,bucket:'brand-videos',path:key,jobId:job.id,origin:process.env.MUSE_MEDIA_GATEWAY_ORIGIN,contentType:'video/mp4',data:await readFile(file)});}
 
 export async function processBrandScriptV3(job,{client,muse,workRoot,workerId,leaseToken}){
   if(job.schema_version!==3||job.status!=='planning'||job.workflow_phase!=='script'||job.scene_seconds!==10||!job.claim_token)throw Error('Yêu cầu kịch bản không hợp lệ.');
   const auth={p_id:job.id,p_worker:workerId,p_token:leaseToken,p_claim:job.claim_token};
   const dir=path.join(workRoot,job.id,job.claim_token);await mkdir(dir,{recursive:true});
-  const reference=await download(client,'brand-references',job.reference_path);
+  const reference=await download(client,'brand-references',job.reference_path,job);
   if(sha256(reference)!==job.reference_sha256)throw Object.assign(Error('Ảnh tham chiếu không khớp với ảnh đã gửi.'),{code:'REFERENCE_MISMATCH',retryable:false});
   const image=path.join(dir,'reference.'+extension(reference));await writeFile(image,reference);
   const conversation=await muse.beginJob(job);
@@ -39,7 +40,7 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
   const updateJob=patch=>rpc(client,'update_brand_job_v2',{...auth,p_patch:patch});
   const updateScene=(index,patch)=>rpc(client,'update_brand_scene_v2',{...auth,p_scene:index,p_patch:patch});
   const dir=path.join(workRoot,job.id,job.claim_token);await mkdir(dir,{recursive:true});
-  const reference=await download(client,'brand-references',job.reference_path);
+  const reference=await download(client,'brand-references',job.reference_path,job);
   if(sha256(reference)!==job.reference_sha256)throw Object.assign(Error('Ảnh tham chiếu không khớp với ảnh đã gửi.'),{code:'REFERENCE_MISMATCH',retryable:false});
   const image=path.join(dir,'reference.'+extension(reference));await writeFile(image,reference);
   const conversation=await muse.beginJob(job);
@@ -56,7 +57,7 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
     const previous=scenes.get(scene.index);
     let file;
     if(previous?.status==='done'){
-      const data=await download(client,'brand-videos',previous.output_path);
+      const data=await download(client,'brand-videos',previous.output_path,job);
       if(sha256(data)!==previous.output_sha256)throw Object.assign(Error(`Cảnh ${scene.index} lưu trữ không toàn vẹn.`),{code:'STORED_SCENE_MISMATCH',retryable:false});
       file=path.join(dir,`scene-${scene.index}.mp4`);await writeFile(file,data);
     }else{
@@ -137,7 +138,7 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
         const data=await readFile(file),fingerprint=sha256(data);
         if(hashes.has(fingerprint))throw Object.assign(Error('Video các cảnh bị trùng.'),{code:'DUPLICATE_SCENE',retryable:false});
         const key=`${job.user_id}/${job.id}/${job.claim_token}/scenes/${String(scene.index).padStart(2,'0')}.mp4`;
-        await upload(client,key,file);
+        await upload(client,key,file,job);
         await updateScene(scene.index,{status:'done',submission_state:'downloaded',output_path:key,duration:meta.duration,output_sha256:fingerprint,speech_audit:audit,error:null,error_code:null});
         console.log(`Yêu cầu ${job.id} · đoạn ${scene.index}/${job.scene_count} · đã lưu MP4 hợp lệ.`);
         break;
@@ -157,7 +158,7 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
     :await auditor.verify(final,{dialogue:plan.map(s=>s.dialogue).filter(Boolean).join(' '),source_quotes:plan.flatMap(s=>s.source_quotes||[])},job.scene_count*job.scene_seconds);
   if(!finalAudit.ok)throw Object.assign(Error('Lời thoại trong video ghép chưa được xác nhận đầy đủ.'),{code:'FINAL_SPEECH_UNVERIFIED',retryable:false});
   const finalPath=`${job.user_id}/${job.id}/${job.claim_token}/final.mp4`;
-  await upload(client,finalPath,final);
+  await upload(client,finalPath,final,job);
   await updateJob({status:'done',final_path:finalPath,final_probe:{...probe,speech_audit:finalAudit}});
   return finalPath;
 }

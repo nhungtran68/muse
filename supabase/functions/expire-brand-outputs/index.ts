@@ -1,5 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { deleteJobOutputs, type RetentionClaim } from "./retention.ts";
+import { deleteDueR2Outputs } from "./r2-retention.ts";
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -46,10 +47,10 @@ Deno.serve(async (request) => {
   }
 
   const jobs = (data ?? []) as RetentionClaim[];
-  const summary = { claimed: jobs.length, expired: 0, partially_cleaned: 0, retry_scheduled: 0, terminal_failures: 0, claim_failures: 0 };
+  const summary = { claimed: jobs.length, expired: 0, partially_cleaned: 0, retry_scheduled: 0, terminal_failures: 0, claim_failures: 0, abandoned_deleted: 0, abandoned_failed: 0 };
 
   for (const job of jobs) {
-    const result = await deleteJobOutputs({
+    const markerResult = await deleteJobOutputs({
       async list(bucket, path, search) {
         const { data, error: listError } = await supabase.storage.from(bucket).list(path, { search, limit: 100 });
         return { data: data?.map((file) => ({ name: file.name })) ?? null, error: listError };
@@ -59,6 +60,16 @@ Deno.serve(async (request) => {
         return { error: removeError };
       },
     }, job);
+    const providerQuery=await supabase.from('brand_jobs').select('storage_provider,reference_storage_provider').eq('id',job.job_id).single();
+    const r2Result=providerQuery.error?{ok:false,failures:[{bucket:'r2-provider',error:providerQuery.error}]}:
+      await deleteDueR2Outputs(job,providerQuery.data,async input=>{
+        const origin=Deno.env.get('MUSE_MEDIA_GATEWAY_ORIGIN')||'https://muse-brand-studio.vercel.app';
+        const url=new URL('/api/media',origin);
+        if(url.protocol!=='https:')throw new Error('R2 cleanup gateway must use HTTPS');
+        const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'expire',...input})});
+        if(!response.ok)throw new Error(`R2 cleanup gateway returned ${response.status}`);
+      });
+    const result={ok:markerResult.ok&&r2Result.ok,failures:[...markerResult.failures,...r2Result.failures]};
 
     if (!result.ok) {
       const messages = result.failures.map(({ bucket, error: failure }) => ({
@@ -102,6 +113,35 @@ Deno.serve(async (request) => {
     } else {
       summary.terminal_failures++;
     }
+  }
+
+  // Unlike completed assets, an interrupted direct upload may never have
+  // reached the job's output_path. Process its pre-registered path separately.
+  const pending=await supabase.rpc('claim_abandoned_r2_uploads',{p_limit:limit});
+  if(pending.error){
+    console.error('brand-retention: abandoned upload claim failed',pending.error.message);
+    summary.claim_failures++;
+  }else for(const item of pending.data??[]){
+    let ok=true;
+    try{
+      const origin=Deno.env.get('MUSE_MEDIA_GATEWAY_ORIGIN')||'https://muse-brand-studio.vercel.app';
+      const url=new URL('/api/media',origin);
+      if(url.protocol!=='https:')throw new Error('R2 cleanup gateway must use HTTPS');
+      const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+        action:'expire_abandoned',jobId:item.job_id,claim:item.claim_token,bucket:item.bucket,paths:[item.object_path]
+      })});
+      if(!response.ok)throw new Error(`R2 cleanup gateway returned ${response.status}`);
+      const markerJob={job_id:item.job_id,user_id:item.user_id,final_path:item.bucket==='brand-videos'?item.object_path:null,
+        reference_path:item.bucket==='brand-references'?item.object_path:null,scene_paths:[],retention_attempt:item.attempt,retention_claim_token:item.claim_token};
+      const removed=await deleteJobOutputs({
+        async list(bucket,path,search){const {data,error}=await supabase.storage.from(bucket).list(path,{search,limit:100});return {data:data?.map(file=>({name:file.name}))??null,error};},
+        async remove(bucket,paths){const {error}=await supabase.storage.from(bucket).remove(paths);return {error};}
+      },markerJob);
+      if(!removed.ok)throw new Error('Unable to remove upload marker');
+    }catch(error){ok=false;console.error('brand-retention: abandoned upload removal failed',{job_id:item.job_id,attempt:item.attempt,error:error instanceof Error?error.message:String(error)});}
+    const completed=await supabase.rpc('complete_abandoned_r2_upload',{p_id:item.job_id,p_claim:item.claim_token,p_success:ok});
+    if(completed.error||completed.data!==true){summary.claim_failures++;console.error('brand-retention: abandoned upload completion failed',{job_id:item.job_id,error:completed.error?.message});}
+    else if(ok)summary.abandoned_deleted++;else summary.abandoned_failed++;
   }
 
   return json(summary);
