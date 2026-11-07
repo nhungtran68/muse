@@ -1,0 +1,23 @@
+{
+  "id": "/",
+  "name": "Muse Studio",
+  "short_name": "Muse Studio",
+  "description": "Không gian sáng tạo video và hình ảnh.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f5f7fc",
+  "theme_color": "#012bea",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
