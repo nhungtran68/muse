@@ -4,7 +4,7 @@ export const CREATION_MODES=Object.freeze([
     placeholder:'Mô tả video 10 giây bạn muốn tạo. Nêu chủ đề, phong cách, lời nói hoặc hành động nếu cần…'},
   {id:'video_free',label:'Video tự do',kind:'video',referenceRequired:false,
     hint:'Một video hoàn chỉnh · độ dài theo yêu cầu',
-    placeholder:'Mô tả video bạn muốn tạo, độ dài và khung hình mong muốn. Muse sẽ tự xử lý và ghép thành một video hoàn chỉnh…'},
+    placeholder:'Mô tả video bạn muốn tạo, độ dài và khung hình mong muốn. Hệ thống sẽ tự xử lý và ghép thành một video hoàn chỉnh…'},
   {id:'image',label:'Tạo ảnh',kind:'image',referenceRequired:false,
     hint:'Một ảnh · phong cách và tỷ lệ theo yêu cầu',
     placeholder:'Mô tả ảnh bạn muốn tạo: chủ thể, bối cảnh, màu sắc, phong cách và tỷ lệ ảnh. Có thể thêm ảnh tham chiếu bên dưới…'}
