@@ -22,7 +22,7 @@ function show() {
 window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); installEvent=event; show(); });
 window.addEventListener('appinstalled', hide);
 if (ios) window.addEventListener('load', show);
-if ('serviceWorker' in navigator && window.isSecureContext) {
+if (import.meta.env.PROD && 'serviceWorker' in navigator && window.isSecureContext) {
   window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').then(registration => {
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') registration.update().catch(() => {}); });
   }).catch(() => {}));
