@@ -4,13 +4,16 @@ import {mkdir,readFile,writeFile,stat,rename} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {runtimeDataDir,acquireInstanceLock} from './runtime-state.mjs';
+import {controlStorage,createControlClient,createControlPoller} from './control-device.mjs';
 
 const dataDir=runtimeDataDir(),appDir=path.dirname(fileURLToPath(import.meta.url));
 let release;try{release=await acquireInstanceLock(dataDir,'supervisor');}catch(error){console.log(error.message);process.exit(error.code==='WORKER_ALREADY_RUNNING'?0:1);}
 await mkdir(path.join(dataDir,'logs'),{recursive:true});
 const logfile=path.join(dataDir,'logs','worker.log');
 if((await stat(logfile).catch(()=>({size:0}))).size>5*1024*1024)await rename(logfile,logfile+'.previous').catch(()=>{});
-const log=createWriteStream(logfile,{flags:'a'}),pause=ms=>new Promise(r=>setTimeout(r,ms));
+const log=createWriteStream(logfile,{flags:'a'});
+let wakePause=null;
+const pause=ms=>new Promise(resolve=>{const timer=setTimeout(done,ms);function done(){clearTimeout(timer);if(wakePause===done)wakePause=null;resolve();}wakePause=done;});
 let stopping=false,child=null,lastDockerLaunch=0,lastState='';
 function record(message){log.write(new Date().toISOString()+' '+String(message).replace(/[A-Za-z0-9_-]{80,}/g,'[redacted]')+'\n');}
 async function state(value){if(lastState!==value){record(value);lastState=value;}await writeFile(path.join(dataDir,'supervisor-status.json'),JSON.stringify({state:value,pid:process.pid,worker_pid:child?.pid||null,time:new Date().toISOString()}));}
@@ -21,6 +24,17 @@ function command(args,timeout=15000){return new Promise(resolve=>{
   p.once('error',()=>{clearTimeout(timer);resolve({ok:false,output:'unavailable'});});
   p.once('close',code=>{clearTimeout(timer);resolve({ok:code===0,output:output.trim()});});
 });}
+async function controlState(){
+  const status=await readFile(path.join(dataDir,'startup-status.json'),'utf8').then(JSON.parse).catch(()=>({}));
+  if(child?.pid===status.pid){
+    if(status.code==='ADMIN_LOGIN_REQUIRED'||status.code==='ADMIN_NOT_APPROVED')return 'waiting_admin_login';
+    if(['checking_tools','waiting_admin_login','waiting_muse_login','waiting_worker_lease','ready','error'].includes(status.state))return status.state;
+  }
+  if(lastState==='waiting_retry'&&(status.code==='ADMIN_LOGIN_REQUIRED'||status.code==='ADMIN_NOT_APPROVED'))return 'waiting_admin_login';
+  return ['waiting_docker','waiting_asr','starting_worker','waiting_setup','asr_container_missing','waiting_retry','stopped'].includes(lastState)?lastState:'starting_worker';
+}
+const control=createControlPoller({client:createControlClient(),storage:controlStorage(dataDir),readState:controlState,wake:()=>{record('Admin requested startup check');wakePause?.();}});
+control.start();
 async function stop(){if(stopping)return;stopping=true;record('Stopping supervisor');if(child?.connected)child.send('shutdown');}
 process.on('SIGINT',()=>void stop());process.on('SIGTERM',()=>void stop());
 try{
@@ -63,4 +77,4 @@ try{
     await state('waiting_retry');
     await pause(status.code==='ADMIN_LOGIN_REQUIRED'?60000:15000);
   }
-}finally{await state('stopped');await release();log.end();}
+}finally{control.stop();await state('stopped');await release();log.end();}

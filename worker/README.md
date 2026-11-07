@@ -1,6 +1,8 @@
-# Muse Brand Worker 3.2.0
+# Muse Brand Worker 3.3.0
 
 Worker chạy trên máy quản trị viên và dùng phiên Muse trong hồ sơ Chrome riêng. Sau khi đăng nhập Windows, bộ giám sát tự mở Docker Desktop, chờ `fb-whisper`, khởi động Worker và mở lại Muse. Nếu Docker hoặc Whisper ngừng, bộ giám sát chờ và khôi phục trước khi Worker nhận tác vụ.
+
+Từ bản 3.3.0, quản trị viên có thể kiểm tra tình trạng và bấm **Khởi động hệ thống** trong mục **Quản trị** trên web. Máy phải đang bật, đăng nhập Windows và có mạng. Lần đầu cần chạy `03-DANG-NHAP.cmd` để kết nối máy; phiên quản trị được Windows mã hóa. Một mã thiết bị ngẫu nhiên, chỉ cho phép báo trạng thái và nhận lệnh khởi động, cũng được mã hóa trên máy. Lệnh không khởi động lại worker đang xử lý và không thể bật máy đã tắt. Nếu Muse hoặc tài khoản quản trị thu hồi phiên, cần đăng nhập lại trực tiếp trên máy.
 
 Phiên bản 3.2.0 hỗ trợ kho R2 riêng tư cho ảnh và video đến 100 MiB. Chỉ cập nhật Worker sau khi cơ sở dữ liệu và cổng kết nối R2 đã được triển khai; giữ nguyên thư mục phiên đăng nhập hiện có. Các tệp cũ vẫn dùng kho Supabase cũ.
 

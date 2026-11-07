@@ -12,6 +12,7 @@ import {claimNextBrandJob} from './queue.mjs';
 import {persistJobFailure} from './job-failure.mjs';
 import {LeaseGuard} from './lease-guard.mjs';
 import {runtimeDataDir,encryptedSessionStorage,acquireInstanceLock} from './runtime-state.mjs';
+import {enrollControlDevice} from './control-device.mjs';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const workerVersion=JSON.parse(await readFile(new URL('./package.json',import.meta.url),'utf8')).version;
@@ -55,6 +56,7 @@ async function renew(){
 try{
   await startupStatus('checking_tools');await checkMediaToolsAvailable();await auditor.checkAvailable();
   await startupStatus('waiting_admin_login');await adminLoginV2(supabase,{interactive:!process.argv.includes('--unattended')&&Boolean(process.stdin.isTTY)});
+  try{await enrollControlDevice(supabase,dataDir);}catch{console.warn('Chưa kết nối điều khiển trên web; worker vẫn hoạt động bình thường.');}
   await startupStatus('waiting_muse_login');await muse.waitForLogin({timeoutMs:Number(process.env.MUSE_LOGIN_TIMEOUT_MS)||600000});
   if(process.argv.includes('--diagnose'))console.log('MUSE_CHECK_OK');
   else{

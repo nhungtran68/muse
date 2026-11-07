@@ -466,3 +466,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .job-thumbnail { width: 48px; height: 48px; flex-basis: 48px; }
   .job-action .download-final, .job-action .view-video { min-height: 44px; }
 }
+.system-control .system-state { margin: 0; color: var(--ink); font-weight: 700; }
+.system-control .admin-note { margin: 0; }
+.system-control #system-feedback:empty { display: none; }
+.system-control .primary { width: fit-content; }
+@media(max-width:650px) { .system-control .primary { width: 100%; } }
