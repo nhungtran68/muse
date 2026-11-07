@@ -15,6 +15,7 @@ const shortDate = value => new Intl.DateTimeFormat('vi-VN',{dateStyle:'short',ti
 const labels = {uploading:'Đang tải ảnh',queued:'Đang xếp hàng',planning:'AI chia cảnh',generating:'Đang tạo cảnh',joining:'Đang ghép',done:'Hoàn tất',needs_review:'Cần kiểm tra',reviewed:'Đã kiểm tra'};
 let session = null, profile = null, settings = null, modes = [], poller = null, previewUrl = null, jobsSignature = '', appEpoch = 0, jobsRefreshVersion = 0, sceneRetryAvailable = null, jobsVisibleCount = 3, jobsTotalCount = 0, retentionClock = null;
 let preparedReference=null,referenceNormalizationSequence=0;
+let controlStatusLoading=false,controlStarting=false;
 const retryingJobs=new Set(),retryingScenes=new Set();
 const retentionExpiredRefreshes=new Set();
 
@@ -534,6 +535,17 @@ async function refreshJobs({force=false}={}) {
 
 function renderAdmin() {
   document.querySelector('#admin').innerHTML=`<div class="section-head"><div><p class="eyebrow">DÀNH CHO QUẢN TRỊ</p><h2>Cài đặt & thành viên</h2></div><span class="section-note">Chỉ quản trị viên có quyền thay đổi</span></div><div class="admin-grid"><form id="settings-form" class="admin-card"><h3>Cài đặt tạo video</h3><label class="toggle"><input id="enabled" type="checkbox" ${settings.enabled?'checked':''}><span>Nhận yêu cầu mới</span></label><label>Lượt mỗi thành viên/ngày<input id="daily-limit" type="number" min="1" max="30" value="${settings.daily_limit}"></label><p class="admin-note">Mỗi yêu cầu tạo một video. Hệ thống tự chọn thời lượng trong các chế độ Muse đang bật. Worker trên máy cần đăng nhập Muse và chạy để xử lý hàng đợi.</p><button class="primary" type="submit">Lưu cài đặt</button></form><div class="admin-card"><h3>Thành viên</h3><div id="member-list" class="mini-list">Đang tải…</div></div><div class="admin-card full-width"><h3>Tác vụ cần kiểm tra</h3><div id="review-list" class="mini-list">Đang tải…</div></div></div>`;
+  document.querySelector('#admin .admin-grid').insertAdjacentHTML('afterbegin',`<div class="admin-card system-control"><h3>Hệ thống Muse</h3><p id="system-state" class="system-state" role="status">Đang kiểm tra kết nối máy…</p><p id="system-detail" class="admin-note">Máy chạy Muse cần bật và đăng nhập Windows.</p><button id="start-system" class="primary" type="button" disabled>Khởi động hệ thống</button><p id="system-feedback" class="admin-note" aria-live="polite"></p></div>`);
+  on('#start-system','click',async event=>{
+    if(controlStarting)return;
+    controlStarting=true;event.currentTarget.disabled=true;
+    const feedback=document.querySelector('#system-feedback');if(feedback)feedback.textContent='Đang gửi lệnh khởi động…';
+    try{
+      const {error}=await supabase.rpc('muse_control_start');if(error)throw error;
+      if(feedback?.isConnected)feedback.textContent='Đã gửi lệnh. Hệ thống đang kiểm tra và khởi động các thành phần cần thiết.';
+    }catch(error){if(feedback?.isConnected)feedback.textContent=error.message||'Không gửi được lệnh. Hãy kiểm tra kết nối.';}
+    finally{controlStarting=false;await refreshControlStatus();}
+  });
   on('#settings-form','submit',async event=>{
     event.preventDefault();const values={enabled:document.querySelector('#enabled').checked,daily_limit:Number(document.querySelector('#daily-limit').value),updated_at:new Date().toISOString()};
     const {error}=await supabase.from('app_settings').update(values).eq('id',true);if(error)return message(error.message,'error');settings={...settings,...values};message('Đã lưu cài đặt.','success');renderModule();
@@ -541,8 +553,40 @@ function renderAdmin() {
   refreshAdmin();
 }
 
+async function refreshControlStatus(){
+  if(controlStatusLoading||profile?.role!=='admin'||!profile.approved||!document.querySelector('#system-state'))return;
+  controlStatusLoading=true;const userId=session?.user.id;
+  try{
+    const {data,error}=await supabase.rpc('muse_control_status');
+    if(session?.user.id!==userId||!document.querySelector('#system-state'))return;
+    const state=document.querySelector('#system-state'),detail=document.querySelector('#system-detail'),button=document.querySelector('#start-system');
+    if(error){state.textContent='Chưa kết nối chức năng điều khiển';detail.textContent='Cần cập nhật hệ thống trước khi khởi động từ web.';button.disabled=true;return;}
+    const messages={
+      ready:['Sẵn sàng','Muse đã kết nối và có thể nhận yêu cầu.'],
+      waiting_admin_login:['Cần đăng nhập quản trị trên máy','Mở 03-DANG-NHAP.cmd trên máy chạy Muse và đăng nhập một lần.'],
+      waiting_muse_login:['Cần kiểm tra Muse','Kiểm tra cửa sổ Muse trên máy và đăng nhập lại nếu được yêu cầu.'],
+      waiting_worker_lease:['Đang chờ worker khác','Hệ thống chờ worker đang hoạt động hoàn tất hoặc nhường quyền.'],
+      waiting_docker:['Đang khởi động Docker','Hệ thống đang chờ Docker sẵn sàng.'],
+      waiting_asr:['Đang chuẩn bị dịch vụ','Hệ thống đang kiểm tra dịch vụ phụ trợ.'],
+      asr_container_missing:['Thiếu dịch vụ phụ trợ','Không tìm thấy dịch vụ nhận dạng giọng nói trên máy.'],
+      waiting_setup:['Đang cài đặt','Vui lòng chờ quá trình cài đặt hoặc đăng nhập hoàn tất.'],
+      checking_tools:['Đang kiểm tra hệ thống','Đang kiểm tra các thành phần cần thiết.'],
+      starting_worker:['Đang khởi động','Đang mở worker và Muse trên máy.'],
+      waiting_retry:['Đang thử kết nối lại','Hệ thống sẽ tự kiểm tra và thử lại.'],
+      error:['Không thể khởi động','Kiểm tra thông báo trên máy chạy Muse.'],
+      stopped:['Đã dừng','Bộ điều khiển trên máy đã dừng.']
+    };
+    const pair=!data?.paired?['Chưa kết nối máy','Cần đăng nhập quản trị một lần trên máy chạy Muse để kết nối.']:
+      !data.online?['Máy chưa kết nối','Bật máy chạy Muse và đăng nhập Windows; không thể khởi động máy đã tắt từ web.']:
+      messages[data.state]||['Đang kiểm tra','Hệ thống đang cập nhật trạng thái.'];
+    state.textContent=pair[0];detail.textContent=pair[1];button.disabled=controlStarting||!data?.online;
+  }catch{const detail=document.querySelector('#system-detail');if(detail)detail.textContent='Không kiểm tra được kết nối. Hãy thử lại.';}
+  finally{controlStatusLoading=false;}
+}
+
 async function refreshAdmin() {
   if(profile?.role!=='admin'||!document.querySelector('#member-list'))return;
+  void refreshControlStatus();
   const userId=session.user.id;
   const [members,jobs]=await Promise.all([
     supabase.from('profiles').select('id,email,role,approved,created_at').order('created_at',{ascending:false}),
