@@ -8,6 +8,7 @@ import {uploadMedia,downloadMedia,signedMediaUrl} from '../shared/media-storage.
 import './styles.css';
 import './brand-script.css';
 import './pwa.js';
+import {displayMessage} from './display-text.mjs';
 
 const root = document.querySelector('#app');
 const supabase = supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
@@ -22,7 +23,7 @@ const retentionExpiredRefreshes=new Set();
 
 function message(text, type='info') {
   const box = document.querySelector('#notice');
-  if (box) {box.textContent=text; box.className='notice '+type; box.hidden=false;}
+  if (box) {box.textContent=displayMessage(text); box.className='notice '+type; box.hidden=false;}
 }
 function clearMessage() { const box=document.querySelector('#notice'); if(box) box.hidden=true; }
 function on(selector,event,handler) { document.querySelector(selector)?.addEventListener(event,handler); }
@@ -31,7 +32,7 @@ function showLoading() { root.innerHTML='<main class="loading"><span class="spin
 function authView(mode='login') {
   clearInterval(poller);
   clearInterval(retentionClock);
-  root.innerHTML=`<div class="auth-layout"><div class="auth-art"><div class="brandmark">M<span>•</span></div><p class="eyebrow">MUSE STUDIO</p><h1>Từ ý tưởng<br>đến thước phim.</h1><p>Một không gian để tạo ảnh, video và theo dõi các ý tưởng thành hình.</p><div class="art-lines"><i></i><i></i><i></i></div></div><main class="auth-panel"><div class="auth-box"><p class="eyebrow">TÀI KHOẢN</p><h2>${mode==='signup'?'Tạo tài khoản':'Chào mừng trở lại'}</h2><p class="muted">${mode==='signup'?'Đăng ký bằng email. Quản trị viên sẽ duyệt trước khi bạn tạo video.':'Đăng nhập để tiếp tục sáng tạo.'}</p><form id="auth-form"><label>Email<input id="auth-email" type="email" autocomplete="email" required></label><label>Mật khẩu<input id="auth-password" type="password" autocomplete="${mode==='signup'?'new-password':'current-password'}" minlength="12" required></label><button class="primary full" type="submit">${mode==='signup'?'Đăng ký':'Đăng nhập'} <span aria-hidden="true">↗</span></button></form><div id="notice" class="notice" hidden role="status"></div><button id="switch-auth" class="text-button">${mode==='signup'?'Đã có tài khoản? Đăng nhập':'Chưa có tài khoản? Đăng ký'}</button></div></main></div>`;
+  root.innerHTML=`<div class="auth-layout"><div class="auth-art"><div class="brandmark">M<span>•</span></div><p class="eyebrow">MR STUDIO</p><h1>Từ ý tưởng<br>đến thước phim.</h1><p>Một không gian để tạo ảnh, video và theo dõi các ý tưởng thành hình.</p><div class="art-lines"><i></i><i></i><i></i></div></div><main class="auth-panel"><div class="auth-box"><p class="eyebrow">TÀI KHOẢN</p><h2>${mode==='signup'?'Tạo tài khoản':'Chào mừng trở lại'}</h2><p class="muted">${mode==='signup'?'Đăng ký bằng email. Quản trị viên sẽ duyệt trước khi bạn tạo video.':'Đăng nhập để tiếp tục sáng tạo.'}</p><form id="auth-form"><label>Email<input id="auth-email" type="email" autocomplete="email" required></label><label>Mật khẩu<input id="auth-password" type="password" autocomplete="${mode==='signup'?'new-password':'current-password'}" minlength="12" required></label><button class="primary full" type="submit">${mode==='signup'?'Đăng ký':'Đăng nhập'} <span aria-hidden="true">↗</span></button></form><div id="notice" class="notice" hidden role="status"></div><button id="switch-auth" class="text-button">${mode==='signup'?'Đã có tài khoản? Đăng nhập':'Chưa có tài khoản? Đăng ký'}</button></div></main></div>`;
   on('#switch-auth','click',()=>authView(mode==='signup'?'login':'signup'));
   on('#auth-form','submit',async event=>{
     event.preventDefault(); clearMessage();
@@ -57,7 +58,7 @@ async function loadProfile(userId) {
 
 function shell() {
   const isAdmin=profile?.role==='admin'&&profile.approved;
-  root.innerHTML=`<div class="app-shell"><aside class="sidebar"><a class="wordmark" href="#home" aria-label="Muse Studio, trang chủ"><span class="brandmark small">M<span>•</span></span><span>Muse Studio</span></a><div class="side-caption">KHÔNG GIAN LÀM VIỆC</div><nav aria-label="Điều hướng"><a class="nav-item active" href="#home"><span aria-hidden="true">✦</span> Tạo nội dung</a><a class="nav-item" href="#jobs"><span aria-hidden="true">◷</span> Kết quả của tôi</a>${isAdmin?'<a class="nav-item" href="#admin"><span aria-hidden="true">⚙</span> Quản trị</a>':''}</nav><div class="side-bottom"><span class="avatar">${safe((profile?.email||'U')[0].toUpperCase())}</span><div><strong>${safe(profile?.email||session.user.email)}</strong><small>${isAdmin?'Quản trị viên':profile?.approved?'Thành viên':'Chờ duyệt'}</small></div></div></aside><div class="main-column"><header class="topbar"><button class="mobile-brand" id="menu-toggle" aria-label="Mở điều hướng">☰</button><a class="top-wordmark" href="#home"><span class="brandmark tiny">M<span>•</span></span><span>Muse Studio</span></a><button class="outline small-button" id="signout">Đăng xuất</button></header><main class="workspace"><div id="notice" class="notice" hidden role="status"></div><section id="home" class="creation-home" aria-labelledby="home-title"><div class="home-heading"><p class="eyebrow">MUSE STUDIO</p><h1 id="home-title">Bạn muốn sáng tạo gì hôm nay?</h1><p>Chọn chế độ, mô tả ý tưởng và gửi một lần.</p></div><section id="brand" class="module"></section></section><section id="jobs" class="jobs-section"></section>${isAdmin?'<section id="admin" class="admin-section"></section>':''}</main></div></div>`;
+  root.innerHTML=`<div class="app-shell"><aside class="sidebar"><a class="wordmark" href="#home" aria-label="Mr Studio, trang chủ"><span class="brandmark small">M<span>•</span></span><span>Mr Studio</span></a><div class="side-caption">KHÔNG GIAN LÀM VIỆC</div><nav aria-label="Điều hướng"><a class="nav-item active" href="#home"><span aria-hidden="true">✦</span> Tạo nội dung</a><a class="nav-item" href="#jobs"><span aria-hidden="true">◷</span> Kết quả của tôi</a>${isAdmin?'<a class="nav-item" href="#admin"><span aria-hidden="true">⚙</span> Quản trị</a>':''}</nav><div class="side-bottom"><span class="avatar">${safe((profile?.email||'U')[0].toUpperCase())}</span><div><strong>${safe(profile?.email||session.user.email)}</strong><small>${isAdmin?'Quản trị viên':profile?.approved?'Thành viên':'Chờ duyệt'}</small></div></div></aside><div class="main-column"><header class="topbar"><button class="mobile-brand" id="menu-toggle" aria-label="Mở điều hướng">☰</button><a class="top-wordmark" href="#home"><span class="brandmark tiny">M<span>•</span></span><span>Mr Studio</span></a><button class="outline small-button" id="signout">Đăng xuất</button></header><main class="workspace"><div id="notice" class="notice" hidden role="status"></div><section id="home" class="creation-home" aria-labelledby="home-title"><div class="home-heading"><p class="eyebrow">MR STUDIO</p><h1 id="home-title">Bạn muốn sáng tạo gì hôm nay?</h1><p>Chọn chế độ, mô tả ý tưởng và gửi một lần.</p></div><section id="brand" class="module"></section></section><section id="jobs" class="jobs-section"></section>${isAdmin?'<section id="admin" class="admin-section"></section>':''}</main></div></div>`;
   on('#signout','click',async()=>{await supabase.auth.signOut();session=null;profile=null;authView();});
   on('#menu-toggle','click',()=>document.querySelector('.sidebar').classList.toggle('open'));
   document.querySelectorAll('.sidebar .nav-item').forEach(link=>link.addEventListener('click',()=>document.querySelector('.sidebar')?.classList.remove('open')));
@@ -78,7 +79,7 @@ function renderModule() {
     <label class="sr-only" for="content">Mô tả nội dung muốn tạo</label><textarea id="content" rows="5" minlength="10" maxlength="4000" required></textarea>
     <div class="composer-attachments"><input id="reference" type="file" accept="image/png,image/jpeg,image/webp"><label class="attach-control" for="reference"><span class="attach-icon" aria-hidden="true">＋</span><span id="file-name">Thêm ảnh tham chiếu</span></label><button id="remove-reference" class="text-button remove-reference" type="button" hidden>Xóa ảnh</button><small id="reference-hint">JPG, PNG hoặc WebP · tối đa 10 MB</small><img id="image-preview" alt="Ảnh tham chiếu đã chọn" hidden><span class="image-processing-status" id="image-processing-status" role="status" aria-live="polite"></span></div>
     <div class="composer-bottom"><span class="mode-note" id="mode-description" aria-live="polite"></span><button class="primary create-button" type="submit">Gửi <span aria-hidden="true">↑</span></button></div>
-    <p class="consent"><span aria-hidden="true">ⓘ</span> Yêu cầu và ảnh đính kèm được gửi qua tài khoản Muse của đơn vị vận hành. Mỗi lần gửi nhận một kết quả.</p>${settings.enabled?'':'<p class="inline-warning">Quản trị viên đang tạm dừng nhận yêu cầu.</p>'}</form></div><p class="composer-footnote" id="composer-footnote"></p>`;
+    <p class="consent"><span aria-hidden="true">ⓘ</span> Yêu cầu và ảnh đính kèm được xử lý qua hệ thống của đơn vị vận hành. Mỗi lần gửi nhận một kết quả.</p>${settings.enabled?'':'<p class="inline-warning">Quản trị viên đang tạm dừng nhận yêu cầu.</p>'}</form></div><p class="composer-footnote" id="composer-footnote"></p>`;
   const form=section.querySelector('#create-form'),modeInput=section.querySelector('#creation-mode');
   const referenceInput=section.querySelector('#reference');
   const imageStatus=section.querySelector('#image-processing-status');
@@ -101,7 +102,7 @@ function renderModule() {
       imageStatus.dataset.state='ready';
     }catch(error){
       if(sequence!==referenceNormalizationSequence)return;
-      imageStatus.textContent=error.message||'Không xử lý được ảnh. Hãy lưu lại ảnh dưới dạng JPG, PNG hoặc WebP rồi thử lại.';
+      imageStatus.textContent=displayMessage(error.message)||'Không xử lý được ảnh. Hãy lưu lại ảnh dưới dạng JPG, PNG hoặc WebP rồi thử lại.';
       imageStatus.dataset.state='error';
     }finally{if(sequence===referenceNormalizationSequence)syncCreateButton();}
   };
@@ -110,7 +111,7 @@ function renderModule() {
     section.querySelector('#content').placeholder=mode.placeholder;
     section.querySelector('#mode-description').textContent=mode.id==='video_10s'&&!modes.some(item=>item.seconds===10)?'Chế độ 10 giây đang tạm tắt':mode.hint;
     section.querySelector('#reference-hint').textContent=`${mode.referenceRequired?'Cần một ảnh':'Ảnh không bắt buộc'} · JPG, PNG, WebP · tối đa 10 MB`;
-    section.querySelector('#composer-footnote').textContent=mode.id==='image'?'Thêm ảnh tham chiếu nếu cần giữ chủ thể hoặc phong cách. Kết quả là một ảnh để xem và tải xuống.':mode.id==='video_free'?'Nhập độ dài và khung hình mong muốn trong mô tả. Muse tự xử lý và ghép thành một video hoàn chỉnh.':'Thêm một ảnh tham chiếu. Kết quả là một video dọc 10 giây theo mô tả của bạn.';
+    section.querySelector('#composer-footnote').textContent=mode.id==='image'?'Thêm ảnh tham chiếu nếu cần giữ chủ thể hoặc phong cách. Kết quả là một ảnh để xem và tải xuống.':mode.id==='video_free'?'Nhập độ dài và khung hình mong muốn trong mô tả. Hệ thống tự xử lý và ghép thành một video hoàn chỉnh.':'Thêm một ảnh tham chiếu. Kết quả là một video dọc 10 giây theo mô tả của bạn.';
     syncCreateButton();
   };
   referenceInput.addEventListener('change',prepareImage);
@@ -138,7 +139,7 @@ async function submitBrand(event) {
   if(content.length<10)return message('Hãy mô tả yêu cầu, tối thiểu 10 ký tự.','error');
   if(mode.id==='video_10s'&&!modes.some(item=>item.seconds===10))return message('Chế độ video 10 giây đang tạm tắt. Hãy chọn chế độ khác hoặc báo quản trị viên.','error');
   form.dataset.busy='true';form.querySelectorAll('input,textarea,select,button').forEach(input=>input.disabled=true);
-  const button=event.submitter||form.querySelector('[type=submit]');button.textContent='Đang gửi…';message('Đang gửi một yêu cầu hoàn chỉnh đến Muse…');
+  const button=event.submitter||form.querySelector('[type=submit]');button.textContent='Đang gửi…';message('Đang gửi yêu cầu xử lý…');
   try{
     const referenceHash=file?await fileHash(file):null;
     if(session?.user.id!==userId)return;
@@ -158,7 +159,7 @@ async function submitBrand(event) {
     }
     localStorage.removeItem(storageKey);
     if(session?.user.id!==userId)return;
-    message(`Đã gửi một yêu cầu hoàn chỉnh đến Muse (${mode.label}). Theo dõi trong “Kết quả của tôi”.`,'success');
+    message(`Đã gửi một yêu cầu hoàn chỉnh (${mode.label}). Theo dõi trong “Kết quả của tôi”.`,'success');
     document.querySelector('#create-form').reset();document.querySelector('#content').dispatchEvent(new Event('input'));
     form.querySelector('#creation-mode').value=mode.id;
     preparedReference=null;referenceNormalizationSequence++;if(previewUrl){URL.revokeObjectURL(previewUrl);previewUrl=null;}
@@ -299,7 +300,7 @@ function renderScriptEditor(job,card,userId){
     slot.insertAdjacentHTML('beforeend','<p class="job-error">Kịch bản chưa khớp số đoạn. Hãy liên hệ quản trị viên.</p>');return;
   }
   const editor=document.createElement('div');editor.className='script-editor';editor.dataset.revision=String(job.script_revision);editor.dataset.dirty='false';
-  editor.innerHTML=`<h4>Kịch bản để bạn chỉnh sửa</h4><p class="muted">Muse đã viết lời thoại. Video chỉ bắt đầu sau khi bạn bấm “Tạo video”.</p><label class="script-count">Số đoạn<select class="script-scene-count">${Array.from({length:settings.max_scenes},(_,i)=>`<option value="${i+1}" ${job.scene_count===i+1?'selected':''}>${i+1} đoạn</option>`).join('')}</select></label><p class="script-total">${job.scene_count} đoạn × 10 giây = ${job.scene_count*10} giây</p>${plan.map(scene=>`<label class="script-line">Đoạn ${scene.index} · 10 giây<textarea class="script-dialogue" data-index="${scene.index}" rows="3" maxlength="600">${safe(scene.dialogue)}</textarea><small>Giọng miền Nam tự nhiên, nói vừa 10 giây và có nhịp nghỉ.</small></label>`).join('')}<p class="script-note" role="status">Lời thoại đã lưu. Bạn có thể sửa trước khi tạo video.</p><div class="script-actions"><button class="outline save-script" type="button">Lưu kịch bản</button><button class="outline replan-script" type="button" hidden>Cập nhật kịch bản</button><button class="primary approve-script" type="button">Tạo video</button></div>`;
+  editor.innerHTML=`<h4>Kịch bản để bạn chỉnh sửa</h4><p class="muted">Kịch bản đã sẵn sàng. Video chỉ bắt đầu sau khi bạn bấm “Tạo video”.</p><label class="script-count">Số đoạn<select class="script-scene-count">${Array.from({length:settings.max_scenes},(_,i)=>`<option value="${i+1}" ${job.scene_count===i+1?'selected':''}>${i+1} đoạn</option>`).join('')}</select></label><p class="script-total">${job.scene_count} đoạn × 10 giây = ${job.scene_count*10} giây</p>${plan.map(scene=>`<label class="script-line">Đoạn ${scene.index} · 10 giây<textarea class="script-dialogue" data-index="${scene.index}" rows="3" maxlength="600">${safe(scene.dialogue)}</textarea><small>Giọng miền Nam tự nhiên, nói vừa 10 giây và có nhịp nghỉ.</small></label>`).join('')}<p class="script-note" role="status">Lời thoại đã lưu. Bạn có thể sửa trước khi tạo video.</p><div class="script-actions"><button class="outline save-script" type="button">Lưu kịch bản</button><button class="outline replan-script" type="button" hidden>Cập nhật kịch bản</button><button class="primary approve-script" type="button">Tạo video</button></div>`;
   card.querySelector('.job-main').append(editor);
   const actor=()=>createClient(supabaseUrl,supabaseKey,{global:{headers:{Authorization:'Bearer '+session.access_token}},auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
   const count=editor.querySelector('.script-scene-count'),note=editor.querySelector('.script-note');
@@ -331,7 +332,7 @@ function renderScriptEditor(job,card,userId){
     }).finally(()=>{if(editor.isConnected)editor.dataset.busy='false';});
     return operation;
   };
-  const explain=error=>{if(current()){note.textContent=error.message||'Không lưu được kịch bản.';message(note.textContent,'error');}};
+  const explain=error=>{if(current()){note.textContent=displayMessage(error.message)||'Không lưu được kịch bản.';message(note.textContent,'error');}};
   count.addEventListener('change',()=>{clearTimeout(saveTimer);updateCount();});
   editor.querySelectorAll('.script-dialogue').forEach(field=>field.addEventListener('input',()=>{
     editor.dataset.dirty='true';note.textContent='Đang chỉnh sửa…';clearTimeout(saveTimer);
@@ -351,7 +352,7 @@ function renderScriptEditor(job,card,userId){
   });
   replanButton.addEventListener('click',async()=>{
     clearTimeout(saveTimer);replanButton.disabled=true;editor.dataset.busy='true';
-    try{await operation.catch(()=>{});if(!current())return;const result=await actor().rpc('replan_brand_script_v3',{p_id:job.id,p_revision:Number(editor.dataset.revision),p_scene_count:Number(count.value)});if(result.error)throw result.error;editor.dataset.dirty='false';editor.dataset.busy='false';await refreshJobs({force:true});message('Đã yêu cầu Muse viết lại kịch bản theo số đoạn mới. Chưa tạo video.','success');}
+    try{await operation.catch(()=>{});if(!current())return;const result=await actor().rpc('replan_brand_script_v3',{p_id:job.id,p_revision:Number(editor.dataset.revision),p_scene_count:Number(count.value)});if(result.error)throw result.error;editor.dataset.dirty='false';editor.dataset.busy='false';await refreshJobs({force:true});message('Đã yêu cầu viết lại kịch bản theo số đoạn mới. Chưa tạo video.','success');}
     catch(error){explain(error);if(current())replanButton.disabled=false;}
     finally{if(current())editor.dataset.busy='false';}
   });
@@ -364,7 +365,7 @@ async function refreshJobs({force=false}={}) {
   const result=await supabase.from('brand_jobs').select('id,user_id,content,scene_count,scene_seconds,creation_mode,storage_provider,reference_storage_provider,final_probe,status,current_scene,reference_path,reference_expires_at,reference_sha256,final_path,output_expires_at,retention_status,retention_attempts,retention_next_attempt_at,error,error_code,retryable,attempt,max_attempts,schema_version,workflow_phase,script_revision,allow_summarize,plan,created_at,brand_scenes(scene_index,prompt,dialogue,action,planned_seconds,status,submission_state,request_receipt,output_path,output_expires_at,error,error_code,generation)',{count:'exact'}).eq('user_id',userId).order('created_at',{ascending:false}).order('id',{ascending:false}).range(0,jobsVisibleCount-1);
   const list=document.querySelector('#jobs-list');if(!list||session?.user.id!==userId||version!==jobsRefreshVersion)return;
   if(!force&&[...list.querySelectorAll('.script-editor')].some(editor=>editor.contains(document.activeElement)||editor.dataset.dirty==='true'||editor.dataset.busy==='true'))return;
-  if(result.error){list.textContent='Không tải được lịch sử: '+result.error.message;updateJobsPagination();return;}
+  if(result.error){list.textContent='Không tải được lịch sử: '+displayMessage(result.error.message);updateJobsPagination();return;}
   jobsTotalCount=result.count??result.data.length;updateJobsPagination();
   if(sceneRetryAvailable===null&&result.data.some(job=>job.status==='error'&&job.schema_version===3&&job.brand_scenes?.some(scene=>['MUSE_OUTPUT_REJECTED','SCENE_MEDIA_INVALID','CUT_OFF_SPEECH','SPEECH_TOO_SHORT','SPEECH_TIMING','SPEECH_MISMATCH','UNEXPECTED_SPEECH'].includes(scene.error_code)))){
     const probe=await supabase.rpc('retry_brand_scene_v3',{p_id:'00000000-0000-0000-0000-000000000000',p_scene:0});
@@ -391,15 +392,15 @@ async function refreshJobs({force=false}={}) {
     const singleVideo=job.brand_scenes?.some(isSingleMediaScene)||job.plan?.some(isSingleMediaScene);
     const isImage=job.creation_mode==='image',mediaName=isImage?'ảnh':'video';
     const firstScene=job.brand_scenes?.find(scene=>scene.scene_index===1);
-    const displayError=job.error_code==='CONTENT_TOO_LONG'?'Muse chưa cô đọng được bản thô ở lượt trước. Hãy tạo lại kịch bản; Muse sẽ tự giữ ý chính và lược chi tiết phụ.':job.error;
+    const displayError=job.error_code==='CONTENT_TOO_LONG'?'Chưa cô đọng được bản thô ở lượt trước. Hãy tạo lại kịch bản; hệ thống sẽ giữ ý chính và lược chi tiết phụ.':job.error;
     const finalActions=canDownloadFinal(job)?`<button class="outline view-video" data-kind="${isImage?'image':'video'}" data-path="${safe(job.final_path)}" data-id="${safe(job.id)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(job.output_expires_at||'')}">Xem ${mediaName}</button><a class="primary download-final download-file" role="button" tabindex="0" aria-disabled="true" data-path="${safe(job.final_path)}" data-id="${safe(job.id)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(job.output_expires_at||'')}">Đang chuẩn bị…</a>`:'';
     const safeResume=hasUncertainSubmission(job);
-    const statusLabel=singleVideo&&job.status==='generating'?(firstScene?.submission_state==='sent'?`Muse đang tạo ${mediaName}`:'Đang gửi yêu cầu'):singleVideo&&job.status==='planning'?'Đang gửi yêu cầu':singleVideo&&job.status==='joining'?'Đang lưu kết quả':status[job.status]||job.status;
-    const otherAction=job.status==='uploading'?`<label class="outline">Chọn lại ảnh<input class="resume-file" type="file" accept="image/png,image/jpeg,image/webp" data-id="${safe(job.id)}"></label>`:job.status==='error'&&job.error_code==='MEDIA_TOO_LARGE'?`<button class="outline resume-oversize-job" type="button" data-id="${safe(job.id)}">Nhận lại kết quả</button>`:safeResume?`<button class="outline resume-uncertain-job" type="button" data-id="${safe(job.id)}">Tiếp tục kiểm tra Muse</button>`:singleVideo&&job.status==='error'&&job.retryable?`<button class="outline retry-single-job" type="button" data-id="${safe(job.id)}">Gửi lại ${mediaName}</button>`:job.status==='error'&&job.retryable?`<button class="outline retry-job" type="button" data-id="${safe(job.id)}">${job.workflow_phase==='script'?'Tạo lại kịch bản':'Tạo lại video'}</button>`:'';
+    const statusLabel=singleVideo&&job.status==='generating'?(firstScene?.submission_state==='sent'?`Đang tạo ${mediaName}`:'Đang gửi yêu cầu'):singleVideo&&job.status==='planning'?'Đang gửi yêu cầu':singleVideo&&job.status==='joining'?'Đang lưu kết quả':status[job.status]||job.status;
+    const otherAction=job.status==='uploading'?`<label class="outline">Chọn lại ảnh<input class="resume-file" type="file" accept="image/png,image/jpeg,image/webp" data-id="${safe(job.id)}"></label>`:job.status==='error'&&job.error_code==='MEDIA_TOO_LARGE'?`<button class="outline resume-oversize-job" type="button" data-id="${safe(job.id)}">Nhận lại kết quả</button>`:safeResume?`<button class="outline resume-uncertain-job" type="button" data-id="${safe(job.id)}">Tiếp tục kiểm tra</button>`:singleVideo&&job.status==='error'&&job.retryable?`<button class="outline retry-single-job" type="button" data-id="${safe(job.id)}">Gửi lại ${mediaName}</button>`:job.status==='error'&&job.retryable?`<button class="outline retry-job" type="button" data-id="${safe(job.id)}">${job.workflow_phase==='script'?'Tạo lại kịch bản':'Tạo lại video'}</button>`:'';
     const durationLabel=isImage?'1 ảnh · Tạo ảnh':job.creation_mode==='video_free'?`1 video · Video tự do${job.final_probe?.duration?` · ${Number(job.final_probe.duration).toFixed(1).replace(/\.0$/,'')} giây`:''}`:singleVideo?`1 video · ${job.scene_seconds} giây`:job.schema_version===3?`${job.scene_count} đoạn · ${job.scene_seconds} giây/đoạn · tổng ${job.scene_count*job.scene_seconds} giây`:`${job.scene_count} cảnh · ${job.scene_seconds} giây/cảnh · tổng ${job.scene_count*job.scene_seconds} giây`;
     const track=scriptNeedsRetry?'':singleVideo?'':`<div class="scene-track">${Array.from({length:job.scene_count},(_,i)=>{const scene=job.brand_scenes?.find(x=>x.scene_index===i+1);return `<span class="scene-pill ${safe(scene?.status||'waiting')}">${String(i+1).padStart(2,'0')}</span>`;}).join('')}</div>`;
     const scriptDetails=singleVideo?'':job.brand_scenes?.length?`<details><summary>Lời thoại từng đoạn</summary>${job.brand_scenes.sort((a,b)=>a.scene_index-b.scene_index).map(scene=>`<p><strong>Đoạn ${scene.scene_index} · ${scene.planned_seconds||job.scene_seconds} giây</strong><br>Lời thoại: ${safe(scene.dialogue||'Không có')}</p>`).join('')}</details>`:'';
-    return `<article class="job-card ${singleVideo?'single-video-job':''}" data-job-id="${safe(job.id)}"><div class="job-main"><div class="job-top"><span>${shortDate(job.created_at)}</span><span class="status status-${safe(job.status)}">${safe(scriptNeedsRetry?'Cần tạo lại kịch bản':statusLabel)}</span></div><div class="job-heading"><img class="job-thumbnail" alt="Ảnh tham chiếu" hidden><h3>${safe(job.content.slice(0,110))}</h3></div><p>${durationLabel}</p><small>Mã yêu cầu: ${safe(job.id)}</small>${displayError?`<p class="job-error">${safe(displayError)}</p>`:''}${retentionMarkup(job)}${scriptNeedsRetry?'<p class="inline-warning">Chưa có kịch bản nên chưa thể tạo video. Sửa nội dung rồi gửi lại yêu cầu.</p>':track}${scriptDetails}</div><div class="job-action">${finalActions}${otherAction}</div><div class="video-slot" id="video-${safe(job.id)}"></div></article>`;
+    return `<article class="job-card ${singleVideo?'single-video-job':''}" data-job-id="${safe(job.id)}"><div class="job-main"><div class="job-top"><span>${shortDate(job.created_at)}</span><span class="status status-${safe(job.status)}">${safe(scriptNeedsRetry?'Cần tạo lại kịch bản':statusLabel)}</span></div><div class="job-heading"><img class="job-thumbnail" alt="Ảnh tham chiếu" hidden><h3>${safe(job.content.slice(0,110))}</h3></div><p>${durationLabel}</p><small>Mã yêu cầu: ${safe(job.id)}</small>${displayError?`<p class="job-error">${safe(displayMessage(displayError))}</p>`:''}${retentionMarkup(job)}${scriptNeedsRetry?'<p class="inline-warning">Chưa có kịch bản nên chưa thể tạo video. Sửa nội dung rồi gửi lại yêu cầu.</p>':track}${scriptDetails}</div><div class="job-action">${finalActions}${otherAction}</div><div class="video-slot" id="video-${safe(job.id)}"></div></article>`;
   }).join('');
   result.data.forEach(async(job,index)=>{
     if(!job.reference_path)return;
@@ -418,14 +419,14 @@ async function refreshJobs({force=false}={}) {
       const scene=job.brand_scenes?.find(item=>item.scene_index===index+1),state=visibleSceneStatus(job,scene);
       const safeResume=hasUncertainSubmission(job)&&['sending','sent'].includes(scene?.submission_state)&&scene?.request_receipt;
       const singleVideo=job.brand_scenes?.some(isSingleMediaScene)||job.plan?.some(isSingleMediaScene);
-      const stateLabel=safeResume?'Cần tiếp tục kiểm tra Muse':singleVideo&&state==='generating'?(scene?.submission_state==='sent'?'Muse đang tạo video':'Đang gửi yêu cầu'):labels[state]||state;
+      const stateLabel=safeResume?'Cần tiếp tục kiểm tra':singleVideo&&state==='generating'?(scene?.submission_state==='sent'?'Đang tạo video':'Đang gửi yêu cầu'):labels[state]||state;
       const slotId=`video-${job.id}-scene-${index+1}`;
       const sceneExpiry=scene?.output_expires_at||'';
       const sceneRemaining=sceneExpiry?Date.parse(sceneExpiry)-Date.now():null;
       const sceneTimer=sceneExpiry?`<small class="scene-expiry">Còn: <span class="scene-expiry-timer" data-expiry="${safe(sceneExpiry)}">${sceneRemaining>0?formatRemaining(sceneRemaining):'đang chờ máy chủ xác nhận xóa'}</span></small>`:'';
       const canResume=state==='error'&&job.status==='error'&&job.retryable&&!safeResume;
       const canRestart=sceneRetryAvailable&&state==='error'&&job.status==='error'&&job.schema_version===3&&!canResume&&['MUSE_OUTPUT_REJECTED','SCENE_MEDIA_INVALID','CUT_OFF_SPEECH','SPEECH_TOO_SHORT','SPEECH_TIMING','SPEECH_MISMATCH','UNEXPECTED_SPEECH'].includes(scene?.error_code);
-      return `<div class="scene-row"><span class="scene-pill ${safe(state)}">${String(index+1).padStart(2,'0')}</span><span>${singleVideo?'Video':'Đoạn'} ${index+1}/${job.scene_count}: <strong>${safe(stateLabel)}</strong>${state==='generating'&&!singleVideo?` · lần ${Number(scene?.generation||0)%3+1}/3`:''}${state==='error'&&(scene?.error||safeResume)?`<small class="job-error">${safe(scene?.error||job.error||'Yêu cầu đã gửi chưa hiện trong Muse. Hãy tiếp tục kiểm tra; hệ thống sẽ không gửi clip trùng khi còn biên nhận.')}</small>`:''}${state==='done'?sceneTimer:''}</span>${state==='done'&&scene.output_path&&mediaStillAvailable(job.retention_status,scene.output_expires_at)&&!singleVideo?`<button class="outline view-video view-scene" type="button" data-path="${safe(scene.output_path)}" data-id="${safe(job.id)}" data-scene="${index+1}" data-slot="${safe(slotId)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(scene.output_expires_at||'')}">Xem đoạn</button>`:safeResume&&!singleVideo?`<button class="outline resume-uncertain-job" type="button" data-id="${safe(job.id)}">Tiếp tục kiểm tra</button>`:canResume&&!singleVideo?`<button class="outline retry-job" type="button" data-id="${safe(job.id)}">Tạo lại / tiếp tục đoạn ${index+1}</button>`:canRestart?`<button class="outline retry-scene" type="button" data-id="${safe(job.id)}" data-scene="${index+1}">Tạo lại đoạn ${index+1}</button>`:''}<div class="video-slot" id="${safe(slotId)}"></div></div>`;
+      return `<div class="scene-row"><span class="scene-pill ${safe(state)}">${String(index+1).padStart(2,'0')}</span><span>${singleVideo?'Video':'Đoạn'} ${index+1}/${job.scene_count}: <strong>${safe(stateLabel)}</strong>${state==='generating'&&!singleVideo?` · lần ${Number(scene?.generation||0)%3+1}/3`:''}${state==='error'&&(scene?.error||safeResume)?`<small class="job-error">${safe(displayMessage(scene?.error||job.error||'Chưa tìm thấy yêu cầu đã gửi. Hãy tiếp tục kiểm tra; hệ thống sẽ không gửi clip trùng khi còn biên nhận.'))}</small>`:''}${state==='done'?sceneTimer:''}</span>${state==='done'&&scene.output_path&&mediaStillAvailable(job.retention_status,scene.output_expires_at)&&!singleVideo?`<button class="outline view-video view-scene" type="button" data-path="${safe(scene.output_path)}" data-id="${safe(job.id)}" data-scene="${index+1}" data-slot="${safe(slotId)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(scene.output_expires_at||'')}">Xem đoạn</button>`:safeResume&&!singleVideo?`<button class="outline resume-uncertain-job" type="button" data-id="${safe(job.id)}">Tiếp tục kiểm tra</button>`:canResume&&!singleVideo?`<button class="outline retry-job" type="button" data-id="${safe(job.id)}">Tạo lại / tiếp tục đoạn ${index+1}</button>`:canRestart?`<button class="outline retry-scene" type="button" data-id="${safe(job.id)}" data-scene="${index+1}">Tạo lại đoạn ${index+1}</button>`:''}<div class="video-slot" id="${safe(slotId)}"></div></div>`;
     }).join('');
   });
   for(const [id,slot] of openMedia){
@@ -478,7 +479,7 @@ async function refreshJobs({force=false}={}) {
   }));
   list.querySelectorAll('.resume-oversize-job').forEach(button=>button.addEventListener('click',async()=>{
     const id=button.dataset.id;if(retryingJobs.has(id))return;retryingJobs.add(id);button.disabled=true;
-    try{const result=await supabase.rpc('resume_oversize_job_in_r2',{p_id:id});if(result.error)throw result.error;message('Đang nhận lại kết quả Muse đã tạo, không gửi yêu cầu mới.','success');}
+    try{const result=await supabase.rpc('resume_oversize_job_in_r2',{p_id:id});if(result.error)throw result.error;message('Đang nhận lại kết quả đã tạo, không gửi yêu cầu mới.','success');}
     catch(error){message(error.message||'Chưa thể nhận lại kết quả.','error');}
     finally{retryingJobs.delete(id);if(session?.user.id===userId)await refreshJobs({force:true});if(button.isConnected)button.disabled=false;}
   }));
@@ -505,8 +506,8 @@ async function refreshJobs({force=false}={}) {
     list.querySelectorAll('.resume-uncertain-job').forEach(item=>{if(item.dataset.id===id)item.disabled=true;});
     try{
       const result=await supabase.rpc('resume_uncertain_brand_job',{p_id:id});if(result.error)throw result.error;
-      message('Đã xếp tác vụ vào hàng đợi để kiểm tra yêu cầu Muse đã gửi. Biên nhận được giữ lại; không tạo clip trùng.','success');
-    }catch(error){message(error.message||'Không thể tiếp tục kiểm tra Muse. Hãy tải lại trạng thái rồi thử lại.','error');}
+      message('Đã xếp tác vụ vào hàng đợi để kiểm tra yêu cầu đã gửi. Biên nhận được giữ lại; không tạo clip trùng.','success');
+    }catch(error){message(error.message||'Không thể tiếp tục kiểm tra. Hãy tải lại trạng thái rồi thử lại.','error');}
     finally{retryingJobs.delete(id);if(session?.user.id===userId)await refreshJobs({force:true});if(button.isConnected)button.disabled=false;}
   }));
   list.querySelectorAll('.retry-scene').forEach(button=>button.addEventListener('click',async()=>{
@@ -535,8 +536,8 @@ async function refreshJobs({force=false}={}) {
 }
 
 function renderAdmin() {
-  document.querySelector('#admin').innerHTML=`<div class="section-head"><div><p class="eyebrow">DÀNH CHO QUẢN TRỊ</p><h2>Cài đặt & thành viên</h2></div><span class="section-note">Chỉ quản trị viên có quyền thay đổi</span></div><div class="admin-grid"><form id="settings-form" class="admin-card"><h3>Cài đặt tạo video</h3><label class="toggle"><input id="enabled" type="checkbox" ${settings.enabled?'checked':''}><span>Nhận yêu cầu mới</span></label><label>Lượt mỗi thành viên/ngày<input id="daily-limit" type="number" min="1" max="30" value="${settings.daily_limit}"></label><p class="admin-note">Mỗi yêu cầu tạo một video. Hệ thống tự chọn thời lượng trong các chế độ Muse đang bật. Worker trên máy cần đăng nhập Muse và chạy để xử lý hàng đợi.</p><button class="primary" type="submit">Lưu cài đặt</button></form><div class="admin-card"><h3>Thành viên</h3><div id="member-list" class="mini-list">Đang tải…</div></div><div class="admin-card full-width"><h3>Tác vụ cần kiểm tra</h3><div id="review-list" class="mini-list">Đang tải…</div></div></div>`;
-  document.querySelector('#admin .admin-grid').insertAdjacentHTML('afterbegin',`<div class="admin-card system-control"><h3>Hệ thống Muse</h3><p id="system-state" class="system-state" role="status">Đang kiểm tra kết nối máy…</p><p id="system-detail" class="admin-note">Máy chạy Muse cần bật và đăng nhập Windows.</p><button id="start-system" class="primary" type="button" disabled>Khởi động hệ thống</button><p id="system-feedback" class="admin-note" aria-live="polite"></p></div>`);
+  document.querySelector('#admin').innerHTML=`<div class="section-head"><div><p class="eyebrow">DÀNH CHO QUẢN TRỊ</p><h2>Cài đặt & thành viên</h2></div><span class="section-note">Chỉ quản trị viên có quyền thay đổi</span></div><div class="admin-grid"><form id="settings-form" class="admin-card"><h3>Cài đặt tạo video</h3><label class="toggle"><input id="enabled" type="checkbox" ${settings.enabled?'checked':''}><span>Nhận yêu cầu mới</span></label><label>Lượt mỗi thành viên/ngày<input id="daily-limit" type="number" min="1" max="30" value="${settings.daily_limit}"></label><p class="admin-note">Mỗi yêu cầu tạo một video. Hệ thống tự chọn thời lượng trong các chế độ đang bật. Máy xử lý cần được kết nối và chạy để xử lý hàng đợi.</p><button class="primary" type="submit">Lưu cài đặt</button></form><div class="admin-card"><h3>Thành viên</h3><div id="member-list" class="mini-list">Đang tải…</div></div><div class="admin-card full-width"><h3>Tác vụ cần kiểm tra</h3><div id="review-list" class="mini-list">Đang tải…</div></div></div>`;
+  document.querySelector('#admin .admin-grid').insertAdjacentHTML('afterbegin',`<div class="admin-card system-control"><h3>Hệ thống xử lý</h3><p id="system-state" class="system-state" role="status">Đang kiểm tra kết nối máy…</p><p id="system-detail" class="admin-note">Máy xử lý cần bật và đăng nhập Windows.</p><button id="start-system" class="primary" type="button" disabled>Khởi động hệ thống</button><p id="system-feedback" class="admin-note" aria-live="polite"></p></div>`);
   on('#start-system','click',async event=>{
     if(controlStarting)return;
     controlStarting=true;event.currentTarget.disabled=true;
@@ -544,7 +545,7 @@ function renderAdmin() {
     try{
       const {error}=await supabase.rpc('muse_control_start');if(error)throw error;
       if(feedback?.isConnected)feedback.textContent='Đã gửi lệnh. Hệ thống đang kiểm tra và khởi động các thành phần cần thiết.';
-    }catch(error){if(feedback?.isConnected)feedback.textContent=error.message||'Không gửi được lệnh. Hãy kiểm tra kết nối.';}
+    }catch(error){if(feedback?.isConnected)feedback.textContent=displayMessage(error.message)||'Không gửi được lệnh. Hãy kiểm tra kết nối.';}
     finally{controlStarting=false;await refreshControlStatus();}
   });
   on('#settings-form','submit',async event=>{
@@ -563,22 +564,22 @@ async function refreshControlStatus(){
     const state=document.querySelector('#system-state'),detail=document.querySelector('#system-detail'),button=document.querySelector('#start-system');
     if(error){state.textContent='Chưa kết nối chức năng điều khiển';detail.textContent='Cần cập nhật hệ thống trước khi khởi động từ web.';button.disabled=true;return;}
     const messages={
-      ready:['Sẵn sàng','Muse đã kết nối và có thể nhận yêu cầu.'],
-      waiting_admin_login:['Cần đăng nhập quản trị trên máy','Mở 03-DANG-NHAP.cmd trên máy chạy Muse và đăng nhập một lần.'],
-      waiting_muse_login:['Cần kiểm tra Muse','Kiểm tra cửa sổ Muse trên máy và đăng nhập lại nếu được yêu cầu.'],
+      ready:['Sẵn sàng','Hệ thống đã kết nối và có thể nhận yêu cầu.'],
+      waiting_admin_login:['Cần đăng nhập quản trị trên máy','Mở 03-DANG-NHAP.cmd trên máy xử lý và đăng nhập một lần.'],
+      waiting_muse_login:['Cần kiểm tra kết nối','Kiểm tra cửa sổ dịch vụ tạo nội dung trên máy và đăng nhập lại nếu được yêu cầu.'],
       waiting_worker_lease:['Đang chờ worker khác','Hệ thống chờ worker đang hoạt động hoàn tất hoặc nhường quyền.'],
       waiting_docker:['Đang khởi động Docker','Hệ thống đang chờ Docker sẵn sàng.'],
       waiting_asr:['Đang chuẩn bị dịch vụ','Hệ thống đang kiểm tra dịch vụ phụ trợ.'],
       asr_container_missing:['Thiếu dịch vụ phụ trợ','Không tìm thấy dịch vụ nhận dạng giọng nói trên máy.'],
       waiting_setup:['Đang cài đặt','Vui lòng chờ quá trình cài đặt hoặc đăng nhập hoàn tất.'],
       checking_tools:['Đang kiểm tra hệ thống','Đang kiểm tra các thành phần cần thiết.'],
-      starting_worker:['Đang khởi động','Đang mở worker và Muse trên máy.'],
+      starting_worker:['Đang khởi động','Đang mở các thành phần xử lý trên máy.'],
       waiting_retry:['Đang thử kết nối lại','Hệ thống sẽ tự kiểm tra và thử lại.'],
-      error:['Không thể khởi động','Kiểm tra thông báo trên máy chạy Muse.'],
+      error:['Không thể khởi động','Kiểm tra thông báo trên máy xử lý.'],
       stopped:['Đã dừng','Bộ điều khiển trên máy đã dừng.']
     };
-    const pair=!data?.paired?['Chưa kết nối máy','Cần đăng nhập quản trị một lần trên máy chạy Muse để kết nối.']:
-      !data.online?['Máy chưa kết nối','Bật máy chạy Muse và đăng nhập Windows; không thể khởi động máy đã tắt từ web.']:
+    const pair=!data?.paired?['Chưa kết nối máy','Cần đăng nhập quản trị một lần trên máy xử lý để kết nối.']:
+      !data.online?['Máy chưa kết nối','Bật máy xử lý và đăng nhập Windows; không thể khởi động máy đã tắt từ web.']:
       messages[data.state]||['Đang kiểm tra','Hệ thống đang cập nhật trạng thái.'];
     state.textContent=pair[0];detail.textContent=pair[1];button.disabled=controlStarting||!data?.online;
   }catch{const detail=document.querySelector('#system-detail');if(detail)detail.textContent='Không kiểm tra được kết nối. Hãy thử lại.';}
@@ -595,12 +596,12 @@ async function refreshAdmin() {
   ]);
   if(session?.user.id!==userId||profile?.role!=='admin'||!document.querySelector('#member-list'))return;
   const memberList=document.querySelector('#member-list');
-  memberList.innerHTML=members.error?`<p>${safe(members.error.message)}</p>`:members.data.filter(user=>user.role==='member').map(user=>`<div class="mini-row"><div><strong>${safe(user.email)}</strong><small>${user.approved?'Đang hoạt động':'Chờ duyệt'}</small></div><button class="outline approve-user" data-id="${safe(user.id)}" data-next="${!user.approved}">${user.approved?'Tạm khóa':'Duyệt'}</button></div>`).join('')||'<p>Chưa có thành viên.</p>';
+  memberList.innerHTML=members.error?`<p>${safe(displayMessage(members.error.message))}</p>`:members.data.filter(user=>user.role==='member').map(user=>`<div class="mini-row"><div><strong>${safe(user.email)}</strong><small>${user.approved?'Đang hoạt động':'Chờ duyệt'}</small></div><button class="outline approve-user" data-id="${safe(user.id)}" data-next="${!user.approved}">${user.approved?'Tạm khóa':'Duyệt'}</button></div>`).join('')||'<p>Chưa có thành viên.</p>';
   memberList.querySelectorAll('.approve-user').forEach(button=>button.addEventListener('click',async()=>{const {error}=await supabase.from('profiles').update({approved:button.dataset.next==='true'}).eq('id',button.dataset.id);if(error)return message(error.message,'error');await refreshAdmin();}));
   const reviewList=document.querySelector('#review-list');
-  reviewList.innerHTML=jobs.error?`<p>${safe(jobs.error.message)}</p>`:jobs.data.map(job=>`<div class="mini-row"><div><strong>${safe(job.content.slice(0,120))}</strong><small>${shortDate(job.created_at)} · ${safe(job.error||'Cần kiểm tra trên Muse')}</small></div>${job.schema_version===2?(job.retryable&&job.attempt<job.max_attempts?`<button class="outline retry-admin-job" data-id="${safe(job.id)}">Thử lại</button>`:'<small>Cần kiểm tra nguyên nhân trước khi tạo yêu cầu mới.</small>'):`<button class="outline review-job" data-id="${safe(job.id)}">Đã kiểm tra</button>`}</div>`).join('')||'<p>Không có tác vụ cần kiểm tra.</p>';
+  reviewList.innerHTML=jobs.error?`<p>${safe(displayMessage(jobs.error.message))}</p>`:jobs.data.map(job=>`<div class="mini-row"><div><strong>${safe(job.content.slice(0,120))}</strong><small>${shortDate(job.created_at)} · ${safe(displayMessage(job.error||'Cần kiểm tra kết quả'))}</small></div>${job.schema_version===2?(job.retryable&&job.attempt<job.max_attempts?`<button class="outline retry-admin-job" data-id="${safe(job.id)}">Thử lại</button>`:'<small>Cần kiểm tra nguyên nhân trước khi tạo yêu cầu mới.</small>'):`<button class="outline review-job" data-id="${safe(job.id)}">Đã kiểm tra</button>`}</div>`).join('')||'<p>Không có tác vụ cần kiểm tra.</p>';
   reviewList.querySelectorAll('.retry-admin-job').forEach(button=>button.addEventListener('click',async()=>{button.disabled=true;const {error}=await supabase.rpc('retry_brand_job',{p_id:button.dataset.id});if(error)message(error.message,'error');await refreshAdmin();await refreshJobs();}));
-  reviewList.querySelectorAll('.review-job').forEach(button=>button.addEventListener('click',async()=>{if(!window.confirm('Bạn đã xem kết quả trong Muse và xác nhận không còn tác vụ đang chạy?'))return;const {error}=await supabase.rpc('review_legacy_brand_job',{p_id:button.dataset.id});if(error)return message(error.message,'error');await refreshAdmin();await refreshJobs();}));
+  reviewList.querySelectorAll('.review-job').forEach(button=>button.addEventListener('click',async()=>{if(!window.confirm('Bạn đã xem kết quả và xác nhận không còn tác vụ đang chạy?'))return;const {error}=await supabase.rpc('review_legacy_brand_job',{p_id:button.dataset.id});if(error)return message(error.message,'error');await refreshAdmin();await refreshJobs();}));
 }
 
 async function loadApp() {
@@ -609,7 +610,7 @@ async function loadApp() {
   const result=await supabase.auth.getSession();if(epoch!==appEpoch)return;session=result.data.session;
   if(!session){authView();return;}
   try {if(!await loadProfile(session.user.id)||epoch!==appEpoch)return;shell();clearInterval(poller);poller=setInterval(()=>{refreshJobs();if(profile?.role==='admin')refreshAdmin();},7000);}
-  catch(error){if(epoch!==appEpoch)return;root.innerHTML=`<main class="fatal"><h1>Không mở được không gian làm việc</h1><p>${safe(error.message)}</p><button class="primary" id="retry-app">Thử lại</button></main>`;on('#retry-app','click',loadApp);}
+  catch(error){if(epoch!==appEpoch)return;root.innerHTML=`<main class="fatal"><h1>Không mở được không gian làm việc</h1><p>${safe(displayMessage(error.message))}</p><button class="primary" id="retry-app">Thử lại</button></main>`;on('#retry-app','click',loadApp);}
 }
 
 if(!supabase)root.innerHTML='<main class="fatal"><h1>Chưa cấu hình web</h1><p>Cần đặt VITE_SUPABASE_PUBLISHABLE_KEY khi triển khai.</p></main>';

@@ -9,8 +9,8 @@ function hide() { document.querySelector('#pwa-invite')?.remove(); }
 function show() {
   if (!mobile || standalone() || dismissed() || document.querySelector('#pwa-invite') || (!ios && !installEvent)) return;
   const panel = document.createElement('aside');
-  panel.id = 'pwa-invite'; panel.className = 'pwa-invite'; panel.setAttribute('aria-label','Cài ứng dụng Muse Studio');
-  panel.innerHTML = '<img src="/icon-portrait-192.png" width="48" height="48" alt=""><div class="pwa-copy"><strong>Cài ứng dụng</strong><span>Truy cập Muse Studio nhanh hơn từ màn hình chính.</span><p class="pwa-help" hidden></p><div class="pwa-actions"><button type="button" class="pwa-install">Cài đặt</button><button type="button" class="pwa-later">Để sau</button></div></div>';
+  panel.id = 'pwa-invite'; panel.className = 'pwa-invite'; panel.setAttribute('aria-label','Cài ứng dụng Mr Studio');
+  panel.innerHTML = '<img src="/icon-portrait-192.png" width="48" height="48" alt=""><div class="pwa-copy"><strong>Cài ứng dụng</strong><span>Truy cập Mr Studio nhanh hơn từ màn hình chính.</span><p class="pwa-help" hidden></p><div class="pwa-actions"><button type="button" class="pwa-install">Cài đặt</button><button type="button" class="pwa-later">Để sau</button></div></div>';
   document.body.append(panel);
   panel.querySelector('.pwa-later').addEventListener('click', () => { try { localStorage.setItem('muse-install-later', String(Date.now())); } catch {} hide(); });
   panel.querySelector('.pwa-install').addEventListener('click', async () => {

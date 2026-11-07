@@ -65,6 +65,8 @@ test('browser sends one complete video request, retries a failed job safely and 
  await page.goto(`http://127.0.0.1:${port}`);
  await page.locator('#auth-email').fill('one@example.test');await page.locator('#auth-password').fill('local-test-password-123');await page.locator('#auth-form button[type=submit]').click();
  await page.locator('#create-form').waitFor();
+ assert.equal(await page.title(),'Mr Studio');
+ assert.match(await page.locator('.wordmark').innerText(),/Mr Studio/);
  await page.locator('#jobs-list').getByText('Chưa có kết quả nào').waitFor();
  assert.equal(await page.locator('#scene-count').count(),0,'the new composer has no scene-count or multi-step controls');
  assert.equal(await page.getByRole('button',{name:/Tạo kịch bản/}).count(),0);
@@ -94,7 +96,7 @@ test('browser sends one complete video request, retries a failed job safely and 
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),1440,'desktop layout has no horizontal overflow');
   await page.screenshot({path:path.join(process.env.UI_EVIDENCE_DIR,'desktop-1440x900.png')});
  }
- await page.locator('#content').fill('Tạo video giới thiệu khu vườn, có lời kể gần gũi và hình ảnh buổi sớm.');
+ await page.locator('#content').fill('Tạo video giới thiệu khu vườn Muse, có lời kể gần gũi và hình ảnh buổi sớm.');
  const imageBytes=Buffer.from(await page.evaluate(async()=>{
   const canvas=document.createElement('canvas');canvas.width=720;canvas.height=1280;const context=canvas.getContext('2d');context.fillStyle='#234567';context.fillRect(0,0,720,1280);const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));return [...new Uint8Array(await blob.arrayBuffer())];
  }));
@@ -109,7 +111,7 @@ test('browser sends one complete video request, retries a failed job safely and 
  await page.getByRole('button',{name:/Gửi/}).click();
  await page.locator('#jobs-list').getByText('Đang chờ').waitFor();
  assert.deepEqual(calls.map(call=>call.name),['submit','image-upload','queue']);
- assert.equal(calls[0].args.p_seconds,10);assert.equal(calls[0].args.p_content,'Tạo video giới thiệu khu vườn, có lời kể gần gũi và hình ảnh buổi sớm.');
+ assert.equal(calls[0].args.p_seconds,10);assert.equal(calls[0].args.p_content,'Tạo video giới thiệu khu vườn Muse, có lời kể gần gũi và hình ảnh buổi sớm.');
  assert.equal(calls[0].args.p_request_key.length>0,true);
  assert.match(await page.locator('#notice').innerText(),/một yêu cầu hoàn chỉnh/);
  assert.equal(job.scene_count,1);assert.equal(job.plan.length,1);assert.equal(job.scene.action,'single_request');
@@ -133,6 +135,8 @@ test('browser sends one complete video request, retries a failed job safely and 
 
  job={...job,status:'error',error:'Muse không giao video: tác vụ bị từ chối.',error_code:'MUSE_OUTPUT_REJECTED',retryable:true,scene:{...job.scene,status:'error',error:'Muse không giao video.',error_code:'MUSE_OUTPUT_REJECTED'}};
  await page.reload();await page.getByRole('button',{name:'Gửi lại video'}).waitFor();
+ assert.match(await page.locator('.job-card h3').innerText(),/Muse/,'customer text remains unchanged');
+ for (const text of await page.locator('.job-card .job-error').allTextContents()) assert.doesNotMatch(text,/muse/i,'provider names are hidden in saved errors');
  if(process.env.UI_EVIDENCE_DIR){await page.getByRole('button',{name:'Gửi lại video'}).scrollIntoViewIfNeeded();await page.screenshot({path:path.join(process.env.UI_EVIDENCE_DIR,'error-retry-1440x900.png')});}
  await page.getByRole('button',{name:'Gửi lại video'}).click();
  await page.locator('#jobs-list').getByText('Đang chờ').waitFor();

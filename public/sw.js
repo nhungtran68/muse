@@ -1,4 +1,4 @@
-const CACHE = 'muse-offline-v1';
+const CACHE = 'muse-offline-v2';
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.add('/offline.html'))));
 self.addEventListener('activate', event => event.waitUntil((async () => {
   const names = await caches.keys();
