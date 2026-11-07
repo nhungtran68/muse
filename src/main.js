@@ -7,6 +7,7 @@ import {hasUncertainSubmission, visibleSceneStatus} from './job-recovery.mjs';
 import {uploadMedia,downloadMedia,signedMediaUrl} from '../shared/media-storage.mjs';
 import './styles.css';
 import './brand-script.css';
+import './pwa.js';
 
 const root = document.querySelector('#app');
 const supabase = supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
