@@ -12,6 +12,14 @@ const definitions = [
 ];
 
 function objectArgs(value) {return value && typeof value==='object' && !Array.isArray(value);}
+async function readBoundedBody(request){
+  const length=Number(request.headers.get('content-length'));
+  if(Number.isFinite(length)&&length>32768)throw new RangeError('Request too large');
+  if(!request.body)return '';
+  const reader=request.body.getReader(),decoder=new TextDecoder();let size=0,text='';
+  for(;;){const {value,done}=await reader.read();if(done)break;size+=value.byteLength;if(size>32768){await reader.cancel().catch(()=>{});throw new RangeError('Request too large')}text+=decoder.decode(value,{stream:true})}
+  return text+decoder.decode();
+}
 function validate(name,args) {
   const d=definitions.find(x=>x.name===name); if(!d || !objectArgs(args)) return false;
   const props=d.inputSchema.properties;
@@ -29,7 +37,7 @@ export function createMcpHandler({resolveMember,randomUUID=()=>crypto.randomUUID
   if(typeof resolveMember!=='function') throw new Error('A trusted member resolver is required');
   return async function handle(request){
     if(request.method!=='POST')return new Response('Method not allowed',{status:405,headers:{'cache-control':'no-store'}});
-    let data;try{const body=await request.text();if(body.length>32768)return new Response('Request too large',{status:413});data=JSON.parse(body)}catch{return Response.json({jsonrpc:'2.0',id:null,error:{code:-32700,message:'Invalid JSON'}},{status:400})}
+    let data;try{data=JSON.parse(await readBoundedBody(request))}catch(error){if(error instanceof RangeError)return new Response('Request too large',{status:413});return Response.json({jsonrpc:'2.0',id:null,error:{code:-32700,message:'Invalid JSON'}},{status:400})}
     if(!objectArgs(data)||data.jsonrpc!=='2.0'||typeof data.method!=='string')return Response.json({jsonrpc:'2.0',id:data?.id??null,error:{code:-32600,message:'Invalid request'}},{status:400});
     if(!Object.hasOwn(data,'id'))return new Response(null,{status:202,headers:{'cache-control':'no-store'}});
     if(typeof data.id!=='string'&&typeof data.id!=='number'&&data.id!==null)return Response.json({jsonrpc:'2.0',id:null,error:{code:-32600,message:'Invalid request'}},{status:400});
