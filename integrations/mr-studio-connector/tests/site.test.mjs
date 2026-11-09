@@ -16,6 +16,14 @@ test('fails closed without gateway identity or complete configuration',async()=>
  assert.equal((await site.fetch(new Request(origin,{headers}),{})).status,503);
  assert.equal((await site.fetch(new Request('https://other.example/',{headers}),env)).status,400);
 });
+test('unconfigured Site advertises tools but refuses every action',async()=>{
+ const req=(method,params)=>new Request(origin+'/mcp',{method:'POST',body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});
+ const list=await (await site.fetch(req('tools/list'),{})).json();assert.ok(list.result.tools.length>0);
+ for(const name of ['link_account','prepare_request','list_requests']){
+  const call=await (await site.fetch(req('tools/call',{name,arguments:{}}),{})).json();
+  assert.equal(call.result.isError,true);assert.match(call.result.content[0].text,/đang được thiết lập/);
+ }
+});
 test('tool discovery is possible without an identity but actions require one',async()=>{
  const env=fixture();const req=(method,params)=>new Request(origin+'/mcp',{method:'POST',body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});
  const list=await (await site.fetch(req('tools/list'),env)).json();assert.ok(list.result.tools.length>0);
@@ -27,6 +35,7 @@ test('link, authenticated job submission and account isolation work with mocked 
   const req=new Request(input,init),url=new URL(req.url);calls.push({url:url.pathname,authorization:req.headers.get('authorization')});
   if(url.pathname==='/auth/v1/oauth/token')return Response.json({access_token:'member-token',refresh_token:'refresh-token',expires_in:3600,token_type:'bearer'});
   if(url.pathname==='/auth/v1/user')return Response.json({id:uid,email:'test@example.test'});
+  if(url.pathname==='/auth/v1/user/oauth/grants'&&req.method==='DELETE')return new Response(null,{status:204});
   if(url.pathname==='/rest/v1/profiles')return Response.json({approved:true});
   if(url.pathname==='/rest/v1/rpc/submit_single_media_job'){
     const args=await req.json();return Response.json({id:args.p_id,user_id:uid,content:args.p_content,creation_mode:args.p_mode,status:'queued',created_at:'2026-01-01'});
@@ -43,4 +52,6 @@ test('link, authenticated job submission and account isolation work with mocked 
  const unauthorized=await (await site.fetch(rpc('list_requests',{userId:'site-user-2'}),env)).json();assert.equal(unauthorized.error.code,-32602);
  assert.equal(calls.filter(x=>x.url==='/rest/v1/rpc/submit_single_media_job').length,1);
  assert.ok(calls.filter(x=>x.url.startsWith('/rest/v1/')).every(x=>x.authorization==='Bearer member-token'));
+ const unlinked=await site.fetch(new Request(origin+'/link/disconnect',{method:'POST',headers:{...headers,Origin:origin}}),env);assert.match(await unlinked.text(),/thu hồi quyền/);
+ const after=await (await site.fetch(rpc('list_requests',{}),env)).json();assert.equal(after.result.isError,true);
 });

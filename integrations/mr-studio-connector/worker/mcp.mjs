@@ -34,7 +34,7 @@ function validate(name,args) {
   return true;
 }
 
-export function createMcpHandler({resolveMember,resolveSiteIdentity,siteOrigin,randomUUID=()=>crypto.randomUUID()}) {
+export function createMcpHandler({resolveMember,resolveSiteIdentity,siteOrigin,unavailableReason,randomUUID=()=>crypto.randomUUID()}) {
   if(typeof resolveMember!=='function'||typeof resolveSiteIdentity!=='function') throw new Error('Trusted identity and member resolvers are required');
   const site=new URL(siteOrigin);if(site.protocol!=='https:'||site.username||site.password||site.pathname!=='/'||site.search||site.hash)throw new Error('Invalid Site origin');
   return async function handle(request){
@@ -52,6 +52,7 @@ export function createMcpHandler({resolveMember,resolveSiteIdentity,siteOrigin,r
     if(data.method!=='tools/call')return error(-32601,'Method not found');
     const {name,arguments:args={}}=data.params||{};
     if(!validate(name,args))return error(-32602,'Invalid tool arguments');
+    if(unavailableReason)return respond({isError:true,content:[{type:'text',text:unavailableReason}]});
     let siteUser;try{siteUser=await resolveSiteIdentity(request)}catch{}
     if(typeof siteUser!=='string'||!siteUser)return respond({isError:true,content:[{type:'text',text:'Cần đăng nhập trước khi sử dụng.'}]});
     if(name==='link_account')return respond({content:[{type:'text',text:`Mở trang ${site.origin}/ để đăng nhập Mr Studio và xem quyền trước khi chấp thuận.`}],structuredContent:{url:site.origin+'/'} });

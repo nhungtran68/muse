@@ -21,7 +21,7 @@ test('validates authenticated identity, account approval, and request ownership'
 });
 test('consent only approves after explicit click and escapes app data',async()=>{
  const f=fixture();let target='';await renderConsent({root:f.root,client:f.client,userId:user,authorizationId:authId,redirect:value=>{target=value}});
- assert.equal(f.calls.length,0);assert.ok(f.root.innerHTML.includes('Plugin &lt;script&gt;'));assert.ok(!f.root.innerHTML.includes('Plugin <script>'));
+ assert.equal(f.calls.length,0);assert.ok(f.root.innerHTML.includes('Plugin &lt;script&gt;'));assert.ok(!f.root.innerHTML.includes('Plugin <script>'));assert.match(f.root.innerHTML,/bao gồm các thao tác quản trị/);
  f.nodes['#approve-consent'].click();await new Promise(resolve=>setTimeout(resolve,0));
  assert.equal(f.calls.length,1);assert.equal(f.calls[0][0],'approve');assert.equal(target,'https://connector.test/callback?code=example');
 });

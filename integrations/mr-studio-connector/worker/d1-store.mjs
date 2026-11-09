@@ -24,7 +24,8 @@ export function createD1Store({db,clock=Date.now,randomUUID=()=>crypto.randomUUI
       async assertValid(){await row()},
       async beginRefresh(){await update('UPDATE link_sessions SET refresh_pending=1 WHERE user_id=? AND lock_id=? AND lock_until>? AND refresh_pending=0')},
       async finishRefresh(envelope){if(typeof envelope!=='string'||!envelope)throw new Error('Invalid envelope');await update('UPDATE link_sessions SET envelope=?,refresh_pending=0 WHERE user_id=? AND lock_id=? AND lock_until>? AND refresh_pending=1',envelope)},
-      async replace(envelope){if(typeof envelope!=='string'||!envelope)throw new Error('Invalid envelope');await update('UPDATE link_sessions SET envelope=?,refresh_pending=0 WHERE user_id=? AND lock_id=? AND lock_until>?',envelope)}
+      async replace(envelope){if(typeof envelope!=='string'||!envelope)throw new Error('Invalid envelope');await update('UPDATE link_sessions SET envelope=?,refresh_pending=0 WHERE user_id=? AND lock_id=? AND lock_until>?',envelope)},
+      async clear(){await update('UPDATE link_sessions SET envelope=NULL,refresh_pending=0 WHERE user_id=? AND lock_id=? AND lock_until>?')}
     };
     try{return await fn(lease)}finally{await db.prepare('UPDATE link_sessions SET lock_id=NULL,lock_until=NULL WHERE user_id=? AND lock_id=?').bind(userId,lockId).run()}
   }
