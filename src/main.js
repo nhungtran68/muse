@@ -9,6 +9,7 @@ import './styles.css';
 import './brand-script.css';
 import './pwa.js';
 import {displayMessage} from './display-text.mjs';
+import {renderConsent} from './oauth-consent.mjs';
 
 const root = document.querySelector('#app');
 const supabase = supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
@@ -609,6 +610,10 @@ async function loadApp() {
   showLoading();
   const result=await supabase.auth.getSession();if(epoch!==appEpoch)return;session=result.data.session;
   if(!session){authView();return;}
+  if(location.pathname==='/oauth/consent'){
+    clearInterval(poller);clearInterval(retentionClock);
+    await renderConsent({root,client:supabase,userId:session.user.id,authorizationId:new URL(location.href).searchParams.get('authorization_id')});return;
+  }
   try {if(!await loadProfile(session.user.id)||epoch!==appEpoch)return;shell();clearInterval(poller);poller=setInterval(()=>{refreshJobs();if(profile?.role==='admin')refreshAdmin();},7000);}
   catch(error){if(epoch!==appEpoch)return;root.innerHTML=`<main class="fatal"><h1>Không mở được không gian làm việc</h1><p>${safe(displayMessage(error.message))}</p><button class="primary" id="retry-app">Thử lại</button></main>`;on('#retry-app','click',loadApp);}
 }
