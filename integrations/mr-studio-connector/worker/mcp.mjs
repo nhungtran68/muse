@@ -4,6 +4,7 @@ import {createMrStudioTools} from './core.mjs';
 
 const uuid = {type:'string',format:'uuid'};
 const definitions = [
+  {name:'link_account',description:'Mở trang liên kết tài khoản Mr Studio; người dùng tự đăng nhập và quyết định cấp quyền.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false}},
   {name:'prepare_request',description:'Chuẩn bị mã cho một yêu cầu mới. Chưa gửi và chưa tạo video.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false}},
   {name:'create_request',description:'Gửi một yêu cầu video tự do hoặc tạo ảnh. Chỉ gửi khi người dùng yêu cầu. Nếu không chắc đã gửi thành công, kiểm tra trạng thái bằng jobId và không đổi mã khi thử lại.',inputSchema:{type:'object',properties:{jobId:uuid,requestId:uuid,content:{type:'string',minLength:10,maxLength:4000},mode:{type:'string',enum:['video_free','image']}},required:['jobId','requestId','content','mode'],additionalProperties:false},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true}},
   {name:'get_status',description:'Xem trạng thái yêu cầu của tài khoản đã liên kết.',inputSchema:{type:'object',properties:{jobId:uuid},required:['jobId'],additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false}},
@@ -33,8 +34,9 @@ function validate(name,args) {
   return true;
 }
 
-export function createMcpHandler({resolveMember,randomUUID=()=>crypto.randomUUID()}) {
-  if(typeof resolveMember!=='function') throw new Error('A trusted member resolver is required');
+export function createMcpHandler({resolveMember,resolveSiteIdentity,siteOrigin,randomUUID=()=>crypto.randomUUID()}) {
+  if(typeof resolveMember!=='function'||typeof resolveSiteIdentity!=='function') throw new Error('Trusted identity and member resolvers are required');
+  const site=new URL(siteOrigin);if(site.protocol!=='https:'||site.username||site.password||site.pathname!=='/'||site.search||site.hash)throw new Error('Invalid Site origin');
   return async function handle(request){
     if(request.method!=='POST')return new Response('Method not allowed',{status:405,headers:{'cache-control':'no-store'}});
     let data;try{data=JSON.parse(await readBoundedBody(request))}catch(error){if(error instanceof RangeError)return new Response('Request too large',{status:413});return Response.json({jsonrpc:'2.0',id:null,error:{code:-32700,message:'Invalid JSON'}},{status:400})}
@@ -50,6 +52,9 @@ export function createMcpHandler({resolveMember,randomUUID=()=>crypto.randomUUID
     if(data.method!=='tools/call')return error(-32601,'Method not found');
     const {name,arguments:args={}}=data.params||{};
     if(!validate(name,args))return error(-32602,'Invalid tool arguments');
+    let siteUser;try{siteUser=await resolveSiteIdentity(request)}catch{}
+    if(typeof siteUser!=='string'||!siteUser)return respond({isError:true,content:[{type:'text',text:'Cần đăng nhập trước khi sử dụng.'}]});
+    if(name==='link_account')return respond({content:[{type:'text',text:`Mở trang ${site.origin}/ để đăng nhập Mr Studio và xem quyền trước khi chấp thuận.`}],structuredContent:{url:site.origin+'/'} });
     // This resolver must check platform identity and retrieve only the linked
     // member's verified session. The model cannot select the target account.
     let context;try{context=await resolveMember(request)}catch{return respond({isError:true,content:[{type:'text',text:'Không thể xác minh tài khoản. Hãy kết nối lại Mr Studio.'}]})}

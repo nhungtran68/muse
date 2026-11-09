@@ -7,7 +7,8 @@
 - Gửi yêu cầu bằng RPC `submit_single_media_job` sẵn có, yêu cầu jobId và requestId cố định; không tự thử lại khi chưa rõ kết quả.
 - `tests/core.test.mjs`: kiểm tra mô phỏng xác thực, cách ly người dùng, hết hạn và khóa chống tạo trùng.
 - `worker/mcp.mjs`: bộ xử lý JSON-RPC thử nghiệm, công cụ chuẩn bị mã, gửi, xem trạng thái/lịch sử và lấy kết quả; bắt buộc có bộ xác minh thành viên do máy chủ cung cấp. Chưa được gắn vào endpoint công khai.
-- `worker/link-crypto.mjs`: các thành phần PKCE, mã hóa trạng thái và phiên liên kết theo danh tính, có kiểm thử giả lập. Chưa có lưu trữ/thu hồi phiên hoặc kết nối OAuth thực tế.
+- `worker/link-crypto.mjs`: các thành phần PKCE, mã hóa trạng thái và phiên liên kết theo danh tính, có kiểm thử giả lập. Chưa triển khai lưu trữ/thu hồi phiên hoặc kết nối OAuth thực tế.
+- `worker/link-flow.mjs`, `worker/d1-store.mjs`, `worker/session-manager.mjs`, `worker/member-context.mjs` và `worker/site.mjs`: bản chuẩn bị luồng liên kết, lưu phiên mã hóa, khóa đồng thời, làm mới phiên và định tuyến công cụ. Phụ thuộc cổng Sites riêng tư và D1 đã migrate; chưa được xuất bản hoặc kiểm thử với dịch vụ thật.
 - Màn hình đồng ý cấp quyền được chuẩn bị trong PR nháp https://github.com/nhungtran68/muse/pull/16; chưa gộp vào web chính, Supabase OAuth vẫn tắt.
 
 ## Chưa xong
@@ -15,7 +16,7 @@
 - Chưa có OAuth liên kết ChatGPT với tài khoản Mr Studio. Metadata Supabase OAuth hiện trả 404; OAuth server chưa được bật.
 - OAuth server đã được kiểm tra tại dự án chính và đang tắt. Màn hình đồng thuận đã có bản thử nhưng chưa cài đặt ở production.
 - Sites project đã tạo trong phiên trước hiện không được kết nối Sites của phiên này tìm thấy. Cần khôi phục quyền truy cập đúng tài khoản trước khi đồng bộ hoặc xuất bản, không tạo Site trùng.
-- Chưa hỗ trợ ảnh tham chiếu, video 10 giây, hồi phục phiên hoặc thực thi/tải kết quả thật.
+- Chưa hỗ trợ ảnh tham chiếu, video 10 giây hoặc thực thi/tải kết quả thật. Xử lý làm mới phiên đã được chuẩn bị và kiểm thử giả lập nhưng chưa kiểm chứng với dịch vụ thật.
 - Chưa có kiểm thử tích hợp thật, chưa xác minh bảo mật end-to-end.
 
 ## An toàn trước triển khai
@@ -23,5 +24,9 @@
 - Không đưa mật khẩu/token vào nội dung chat hoặc tham số tool. Không dùng service-role key cho việc thay mặt người dùng.
 - Cho từng userId dùng RLS; xác thực ký link, quyền sở hữu, thời hạn; bảo vệ các yêu cầu đồng thời, không tạo trùng khi thời gian chờ không xác định.
 - Phải kiểm thử upload ảnh, 10 giây, tài khoản khác, hàng đợi thật, làm mới phiên và link hết hạn trước khi bật người dùng.
+- `worker/site.mjs` chỉ được chạy sau cổng Sites riêng tư đã xác thực; không đưa Worker ra công khai trực tiếp vì mã phụ thuộc danh tính do cổng cung cấp. Tạo và lưu bí mật mã hóa riêng qua cấu hình an toàn, không ghi vào mã nguồn.
+- Runtime cần `DB` (D1 riêng), `MR_SITE_ORIGIN` (nguồn Sites HTTPS chính xác), `MR_OAUTH_CLIENT_ID` (public OAuth client) và `MR_LINK_KEY` (32 byte ngẫu nhiên mã hóa base64url, lưu dưới dạng secret). Đăng ký callback chính xác `<MR_SITE_ORIGIN>/link/callback`; không bật đăng ký client động đại trà. D1 phải được migrate theo cơ chế Sites trước khi chạy.
+- Phạm vi OAuth `email` chỉ giới hạn thông tin nhận dạng; access token vẫn có quyền dữ liệu của thành viên theo RLS. Phải rà soát chính sách theo `client_id`, minh bạch quyền và cho phép thu hồi trước khi dùng thật. Không coi scope `email` là chỉ đọc.
+- Mã hóa không thay thế cơ chế thu hồi: cần bổ sung giao diện/nghiệp vụ ngắt liên kết và gọi thu hồi grant trước khi bàn giao. Không tự kết nối bằng token có sẵn hay dùng danh tính ChatGPT suy ra từ email.
 
 Chạy thử mô phỏng: `node --test tests/*.test.mjs`.
