@@ -58,7 +58,7 @@ export function createMcpHandler({resolveMember,resolveSiteIdentity,siteOrigin,u
     if(name==='link_account')return respond({content:[{type:'text',text:`Mở trang ${site.origin}/ để đăng nhập Mr Studio và xem quyền trước khi chấp thuận.`}],structuredContent:{url:site.origin+'/'} });
     // This resolver must check platform identity and retrieve only the linked
     // member's verified session. The model cannot select the target account.
-    let context;try{context=await resolveMember(request)}catch{return respond({isError:true,content:[{type:'text',text:'Không thể xác minh tài khoản. Hãy kết nối lại Mr Studio.'}]})}
+    let context;try{context=await resolveMember(request)}catch(error){return respond({isError:true,content:[{type:'text',text:error?.code==='LOCK_BUSY'?'Tài khoản đang xử lý yêu cầu khác. Hãy thử lại sau.':'Không thể xác minh tài khoản. Hãy kết nối lại Mr Studio.'}]})}
     if(!context?.client||!context?.accessToken||!context?.mediaGateway)return respond({isError:true,content:[{type:'text',text:'Cần liên kết tài khoản Mr Studio trước khi sử dụng.'}]});
     try{
       const tools=createMrStudioTools(context);
