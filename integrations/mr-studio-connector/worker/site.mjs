@@ -44,7 +44,7 @@ export default {
     if(url.pathname==='/link/start')return services.link.start(request);
     if(url.pathname==='/link/callback')return services.link.callback(request);
     if(url.pathname==='/link/disconnect')return services.disconnect(request);
-    if(url.pathname==='/'&&request.method==='GET')return new Response(page,{headers:{...headers,'referrer-policy':'strict-origin','content-type':'text/html; charset=utf-8','content-security-policy':`default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${PROJECT}; base-uri 'none'; frame-ancestors 'none'`}});
+    if(url.pathname==='/'&&request.method==='GET')return new Response(page,{headers:{...headers,'referrer-policy':'strict-origin','content-type':'text/html; charset=utf-8','content-security-policy':`default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${PROJECT} ${MEDIA}; base-uri 'none'; frame-ancestors 'none'`}});
     return new Response('Không tìm thấy trang.',{status:404,headers});
   }
 };
