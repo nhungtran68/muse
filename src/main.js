@@ -11,6 +11,7 @@ import './pwa.js';
 import {displayMessage} from './display-text.mjs';
 import {renderConsent} from './oauth-consent.mjs';
 import {renderGrants} from './oauth-grants.mjs';
+import {mountVideoDelivery} from './video-delivery.mjs';
 
 const root = document.querySelector('#app');
 const supabase = supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
@@ -555,6 +556,7 @@ function renderAdmin() {
     const {error}=await supabase.from('app_settings').update(values).eq('id',true);if(error)return message(error.message,'error');settings={...settings,...values};message('Đã lưu cài đặt.','success');renderModule();
   });
   refreshAdmin();
+  mountVideoDelivery(document.querySelector('#admin .admin-grid'),supabase);
 }
 
 async function refreshControlStatus(){
