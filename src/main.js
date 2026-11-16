@@ -11,7 +11,7 @@ import './pwa.js';
 import {displayMessage} from './display-text.mjs';
 import {renderConsent} from './oauth-consent.mjs';
 import {renderGrants} from './oauth-grants.mjs';
-import {mountVideoDelivery} from './video-delivery.mjs';
+import {mountVideoDelivery,mountVideoOptions} from './video-delivery.mjs';
 
 const root = document.querySelector('#app');
 const supabase = supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
@@ -84,6 +84,7 @@ function renderModule() {
     <div class="composer-bottom"><span class="mode-note" id="mode-description" aria-live="polite"></span><button class="primary create-button" type="submit">Gửi <span aria-hidden="true">↑</span></button></div>
     <p class="consent"><span aria-hidden="true">ⓘ</span> Yêu cầu và ảnh đính kèm được xử lý qua hệ thống của đơn vị vận hành. Mỗi lần gửi nhận một kết quả.</p>${settings.enabled?'':'<p class="inline-warning">Quản trị viên đang tạm dừng nhận yêu cầu.</p>'}</form></div><p class="composer-footnote" id="composer-footnote"></p>`;
   const form=section.querySelector('#create-form'),modeInput=section.querySelector('#creation-mode');
+  const syncVideoOptions=mountVideoOptions(form,modeInput,supabase,profile.role==='admin');
   const referenceInput=section.querySelector('#reference');
   const imageStatus=section.querySelector('#image-processing-status');
   const createButton=section.querySelector('.create-button');
@@ -110,6 +111,7 @@ function renderModule() {
     }finally{if(sequence===referenceNormalizationSequence)syncCreateButton();}
   };
   const syncMode=()=>{
+    syncVideoOptions();
     const mode=getCreationMode(modeInput.value);referenceInput.required=mode.referenceRequired;
     section.querySelector('#content').placeholder=mode.placeholder;
     section.querySelector('#mode-description').textContent=mode.id==='video_10s'&&!modes.some(item=>item.seconds===10)?'Chế độ 10 giây đang tạm tắt':mode.hint;
@@ -137,6 +139,9 @@ async function submitBrand(event) {
   const selectedFile=document.querySelector('#reference').files[0],file=preparedReference;
   if(selectedFile&&!file)return message(document.querySelector('#image-processing-status')?.textContent||'Ảnh đang được xử lý. Hãy chờ hoàn tất rồi thử lại.','error');
   const mode=getCreationMode(form.querySelector('#creation-mode').value);
+  const outputR2=mode.id!=='image'&&form.querySelector('[name=output-r2]')?.checked===true;
+  const zaloOption=form.querySelector('[name=output-zalo]');
+  const sendZalo=mode.id!=='image'&&zaloOption?.checked ? (zaloOption.value||null) : null;
   if(mode.referenceRequired&&!file)return message('Chọn ảnh JPG, PNG hoặc WebP để tiếp tục.','error');
   const content=document.querySelector('#content').value.trim();
   if(content.length<10)return message('Hãy mô tả yêu cầu, tối thiểu 10 ký tự.','error');
@@ -146,12 +151,14 @@ async function submitBrand(event) {
   try{
     const referenceHash=file?await fileHash(file):null;
     if(session?.user.id!==userId)return;
-    const fingerprint=await fileHash(new Blob([JSON.stringify(['single-media-v1',userId,content,mode.id,referenceHash])]));
+    const fingerprint=await fileHash(new Blob([JSON.stringify(['single-media-v1',userId,content,mode.id,referenceHash,outputR2,sendZalo])]));
     const storageKey='muse-single-media-submit:'+userId;
     let pending;try{pending=JSON.parse(localStorage.getItem(storageKey));}catch{}
     if(!pending||pending.fingerprint!==fingerprint)pending={id:crypto.randomUUID(),key:crypto.randomUUID(),fingerprint};
     localStorage.setItem(storageKey,JSON.stringify(pending));
-    const created=await submitClient.rpc('submit_single_media_job',{p_id:pending.id,p_request_key:pending.key,p_content:content,p_mode:mode.id,p_reference_sha256:referenceHash});
+    const args={p_id:pending.id,p_request_key:pending.key,p_content:content,p_mode:mode.id,p_reference_sha256:referenceHash};
+    const created=mode.id==='image'?await submitClient.rpc('submit_single_media_job',args):
+      await submitClient.rpc('submit_video_with_distribution',{...args,p_r2:outputR2,p_zalo_group:sendZalo});
     if(created.error)throw created.error;
     const job=created.data;
     if(job.status==='uploading'){
@@ -170,7 +177,12 @@ async function submitBrand(event) {
     const imageStatus=document.querySelector('#image-processing-status');if(imageStatus){imageStatus.textContent='';imageStatus.dataset.state='';}
     form.querySelector('#remove-reference').hidden=true;
     await refreshJobs();document.querySelector('#jobs').scrollIntoView({behavior:'smooth'});
-  }catch(error){if(session?.user.id===userId)message(error.message||'Không gửi được yêu cầu. Hãy thử lại.','error');}
+  }catch(error){if(session?.user.id===userId){
+    const errors={R2_NOT_ALLOWED:'Tài khoản chưa được quyền lưu video vào R2. Bỏ chọn hoặc liên hệ quản trị viên.',
+      ZALO_NOT_ALLOWED:'Nhóm Zalo chưa sẵn sàng hoặc quyền gửi đã thay đổi. Kiểm tra lại lựa chọn.',
+      VIDEO_OPTIONS_ALREADY_SET:'Yêu cầu trùng đang được xử lý với lựa chọn trước đó. Xem trong Kết quả của tôi.'};
+    message(errors[error.message]||error.message||'Không gửi được yêu cầu. Hãy thử lại.','error');
+  }}
   finally{if(form.isConnected){form.dataset.busy='false';form.querySelectorAll('input,textarea,select,button').forEach(input=>input.disabled=false);button.textContent='Gửi';form.dispatchEvent(new Event('composer-sync'));}}
 }
 
@@ -365,7 +377,7 @@ async function refreshJobs({force=false}={}) {
   if(!session||!document.querySelector('#jobs-list'))return;
   if(!force&&[...document.querySelectorAll('.script-editor')].some(editor=>editor.contains(document.activeElement)||editor.dataset.dirty==='true'||editor.dataset.busy==='true'))return;
   const userId=session.user.id,version=++jobsRefreshVersion;
-  const result=await supabase.from('brand_jobs').select('id,user_id,content,scene_count,scene_seconds,creation_mode,storage_provider,reference_storage_provider,final_probe,status,current_scene,reference_path,reference_expires_at,reference_sha256,final_path,output_expires_at,retention_status,retention_attempts,retention_next_attempt_at,error,error_code,retryable,attempt,max_attempts,schema_version,workflow_phase,script_revision,allow_summarize,plan,created_at,brand_scenes(scene_index,prompt,dialogue,action,planned_seconds,status,submission_state,request_receipt,output_path,output_expires_at,error,error_code,generation)',{count:'exact'}).eq('user_id',userId).order('created_at',{ascending:false}).order('id',{ascending:false}).range(0,jobsVisibleCount-1);
+  const result=await supabase.from('brand_jobs').select('id,user_id,content,scene_count,scene_seconds,creation_mode,storage_provider,output_r2_selected,reference_storage_provider,final_probe,status,current_scene,reference_path,reference_expires_at,reference_sha256,final_path,output_expires_at,retention_status,retention_attempts,retention_next_attempt_at,error,error_code,retryable,attempt,max_attempts,schema_version,workflow_phase,script_revision,allow_summarize,plan,created_at,brand_scenes(scene_index,prompt,dialogue,action,planned_seconds,status,submission_state,request_receipt,output_path,output_expires_at,error,error_code,generation)',{count:'exact'}).eq('user_id',userId).order('created_at',{ascending:false}).order('id',{ascending:false}).range(0,jobsVisibleCount-1);
   const list=document.querySelector('#jobs-list');if(!list||session?.user.id!==userId||version!==jobsRefreshVersion)return;
   if(!force&&[...list.querySelectorAll('.script-editor')].some(editor=>editor.contains(document.activeElement)||editor.dataset.dirty==='true'||editor.dataset.busy==='true'))return;
   if(result.error){list.textContent='Không tải được lịch sử: '+displayMessage(result.error.message);updateJobsPagination();return;}
@@ -399,7 +411,7 @@ async function refreshJobs({force=false}={}) {
     const finalActions=canDownloadFinal(job)?`<button class="outline view-video" data-kind="${isImage?'image':'video'}" data-path="${safe(job.final_path)}" data-id="${safe(job.id)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(job.output_expires_at||'')}">Xem ${mediaName}</button><a class="primary download-final download-file" role="button" tabindex="0" aria-disabled="true" data-path="${safe(job.final_path)}" data-id="${safe(job.id)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(job.output_expires_at||'')}">Đang chuẩn bị…</a>`:'';
     const safeResume=hasUncertainSubmission(job);
     const statusLabel=singleVideo&&job.status==='generating'?(firstScene?.submission_state==='sent'?`Đang tạo ${mediaName}`:'Đang gửi yêu cầu'):singleVideo&&job.status==='planning'?'Đang gửi yêu cầu':singleVideo&&job.status==='joining'?'Đang lưu kết quả':status[job.status]||job.status;
-    const otherAction=job.status==='uploading'?`<label class="outline">Chọn lại ảnh<input class="resume-file" type="file" accept="image/png,image/jpeg,image/webp" data-id="${safe(job.id)}"></label>`:job.status==='error'&&job.error_code==='MEDIA_TOO_LARGE'?`<button class="outline resume-oversize-job" type="button" data-id="${safe(job.id)}">Nhận lại kết quả</button>`:safeResume?`<button class="outline resume-uncertain-job" type="button" data-id="${safe(job.id)}">Tiếp tục kiểm tra</button>`:singleVideo&&job.status==='error'&&job.retryable?`<button class="outline retry-single-job" type="button" data-id="${safe(job.id)}">Gửi lại ${mediaName}</button>`:job.status==='error'&&job.retryable?`<button class="outline retry-job" type="button" data-id="${safe(job.id)}">${job.workflow_phase==='script'?'Tạo lại kịch bản':'Tạo lại video'}</button>`:'';
+    const otherAction=job.status==='uploading'?`<label class="outline">Chọn lại ảnh<input class="resume-file" type="file" accept="image/png,image/jpeg,image/webp" data-id="${safe(job.id)}"></label>`:job.status==='error'&&job.error_code==='MEDIA_TOO_LARGE'&&job.output_r2_selected!==false?`<button class="outline resume-oversize-job" type="button" data-id="${safe(job.id)}">Nhận lại kết quả</button>`:safeResume?`<button class="outline resume-uncertain-job" type="button" data-id="${safe(job.id)}">Tiếp tục kiểm tra</button>`:singleVideo&&job.status==='error'&&job.retryable?`<button class="outline retry-single-job" type="button" data-id="${safe(job.id)}">Gửi lại ${mediaName}</button>`:job.status==='error'&&job.retryable?`<button class="outline retry-job" type="button" data-id="${safe(job.id)}">${job.workflow_phase==='script'?'Tạo lại kịch bản':'Tạo lại video'}</button>`:'';
     const durationLabel=isImage?'1 ảnh · Tạo ảnh':job.creation_mode==='video_free'?`1 video · Video tự do${job.final_probe?.duration?` · ${Number(job.final_probe.duration).toFixed(1).replace(/\.0$/,'')} giây`:''}`:singleVideo?`1 video · ${job.scene_seconds} giây`:job.schema_version===3?`${job.scene_count} đoạn · ${job.scene_seconds} giây/đoạn · tổng ${job.scene_count*job.scene_seconds} giây`:`${job.scene_count} cảnh · ${job.scene_seconds} giây/cảnh · tổng ${job.scene_count*job.scene_seconds} giây`;
     const track=scriptNeedsRetry?'':singleVideo?'':`<div class="scene-track">${Array.from({length:job.scene_count},(_,i)=>{const scene=job.brand_scenes?.find(x=>x.scene_index===i+1);return `<span class="scene-pill ${safe(scene?.status||'waiting')}">${String(i+1).padStart(2,'0')}</span>`;}).join('')}</div>`;
     const scriptDetails=singleVideo?'':job.brand_scenes?.length?`<details><summary>Lời thoại từng đoạn</summary>${job.brand_scenes.sort((a,b)=>a.scene_index-b.scene_index).map(scene=>`<p><strong>Đoạn ${scene.scene_index} · ${scene.planned_seconds||job.scene_seconds} giây</strong><br>Lời thoại: ${safe(scene.dialogue||'Không có')}</p>`).join('')}</details>`:'';
