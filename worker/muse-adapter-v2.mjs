@@ -9,6 +9,19 @@ import {mkdir,readFile,writeFile,rename,unlink} from 'node:fs/promises';
 import path from 'node:path';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const MUSE_ORIGIN = 'https://muse.ai';
+const newChatRoutes = ['/', '/thread/new'];
+function isNewChatRoute(value) {
+  const url = new URL(value);
+  return url.origin === MUSE_ORIGIN && newChatRoutes.includes(url.pathname);
+}
+
+function newChatUnavailable() {
+  return Object.assign(Error('Chưa mở được ô chat mới trống trên Muse. Yêu cầu chưa được gửi. Hãy thử lại.'), {
+    code: 'MUSE_NEW_CHAT_UNAVAILABLE',
+    retryable: true
+  });
+}
 
 export function summarizeMuseReply(text){
   return String(text||'').replace(/https?:\/\/\S+/gi,'[liên kết]').replace(/[A-Za-z0-9_-]{40,}/g,'[mã]').replace(/\s+/g,' ').trim().slice(0,240);
@@ -24,9 +37,14 @@ export function museVideoRejection(text){
   });
 }
 
-// Each job needs its own conversation. If Muse changes its controls, stop instead
-// of reusing another customer's conversation.
+// New jobs start in an isolated draft. Retries may resume only their saved chat.
 export class MuseAdapterV2 extends MuseAdapter {
+  async assertNewChatDraft(page) {
+    if (!isNewChatRoute(page.url()) || await page.locator('.hatch-chat-groupable-bubble').count()) {
+      throw newChatUnavailable();
+    }
+  }
+
   async sceneResponse(requestKey,{kind='video',finalOnly=false}={}) {
     const page = this.requirePage();
     const elements = await page.getByRole('button', {
@@ -108,8 +126,9 @@ export class MuseAdapterV2 extends MuseAdapter {
 
   async beginJob(job) {
     const page=this.requirePage();
-    await this.closePreview();
+    this.pendingNewChat = false;
     if(job.conversation_ref?.url){
+      await this.closePreview();
       const url=new URL(job.conversation_ref.url);
       if(url.origin!=='https://muse.ai'||!/^\/thread\/[0-9a-f-]{36}$/i.test(url.pathname))throw Error('Địa chỉ cuộc trò chuyện không hợp lệ.');
       await page.goto(url.href,{waitUntil:'domcontentloaded'});
@@ -124,21 +143,25 @@ export class MuseAdapterV2 extends MuseAdapter {
       return {url:page.url()};
     }
     if(job.conversation_ref?.state==='creating')throw Object.assign(Error('Lần trước bị gián đoạn khi tạo cuộc trò chuyện; cần kiểm tra trước khi tiếp tục.'),{code:'UNCERTAIN_CONVERSATION',retryable:false});
-    const fresh=page.getByRole('button',{name:/^(New side chat|New chat|New conversation|Cuộc trò chuyện mới|Trò chuyện mới|Tạo cuộc trò chuyện)$/i});
-    if(!await fresh.isVisible().catch(()=>false)){
-      const chats=page.getByRole('button',{name:/Open chat and side chats|Mở (?:chat|cuộc trò chuyện)/i});
-      await chats.waitFor({state:'visible',timeout:this.composerTimeoutMs});
-      await chats.click();
+    for (const route of newChatRoutes) {
+      try {
+        // Full navigation drops the old chat UI and works when Muse hides its sidebar.
+        await page.goto(new URL(route, MUSE_ORIGIN).href, {waitUntil:'domcontentloaded', timeout:this.composerTimeoutMs});
+        if (new URL(page.url()).origin !== MUSE_ORIGIN) break;
+        await this.assertConnected();
+        if (!isNewChatRoute(page.url())) continue;
+        const input = this.composer();
+        await input.waitFor({state:'visible',timeout:this.composerTimeoutMs});
+        await sleep(this.draftSettleMs ?? 1500);
+        await this.assertNewChatDraft(page);
+        if ((await input.inputValue({timeout:this.composerTimeoutMs})).trim()) continue;
+        this.pendingNewChat = true;
+        return {state:'creating'};
+      } catch (error) {
+        if (error?.code === 'MUSE_DISCONNECTED') throw error;
+      }
     }
-    await fresh.waitFor({state:'visible',timeout:this.composerTimeoutMs});
-    await fresh.click();
-    await page.waitForURL(url=>url.pathname==='/thread/new',{timeout:this.composerTimeoutMs,waitUntil:'domcontentloaded'});
-    await this.composer().waitFor({state:'visible',timeout:this.composerTimeoutMs});
-    // The old composer can briefly survive the route change. Let Muse finish
-    // mounting the new one before putting any customer data into the draft.
-    await sleep(1500);
-    if(new URL(page.url()).pathname!=='/thread/new')throw Error('Muse chưa mở đúng cuộc trò chuyện mới.');
-    return {state:'creating'};
+    throw newChatUnavailable();
   }
 
   async storyboardResponse(marker) {
@@ -158,14 +181,17 @@ export class MuseAdapterV2 extends MuseAdapter {
     for(let attempt=0;attempt<3;attempt++){
       const responseMarker=`${marker}_T${job.attempt||1}_A${attempt}`;
       const input=await this.cleanComposer();
+      if (this.pendingNewChat) await this.assertNewChatDraft(page);
       if(!attempt)await this.attachReference(imagePath);
       const prompt=buildStoryboardPrompt(job,responseMarker,issue);
       await input.fill(prompt);
       await sleep(1000);
       if(await input.inputValue()!==prompt)throw Object.assign(Error('Ô nhập Muse vừa tải lại; nội dung chưa được gửi. Hãy thử lại.'),{code:'MUSE_COMPOSER_RELOADED'});
+      if (this.pendingNewChat) await this.assertNewChatDraft(page);
       await input.press('Enter');
-      await page.waitForURL(url=>/^\/thread\/[0-9a-f-]{36}$/i.test(url.pathname),{timeout:60000,waitUntil:'commit'});
+      await page.waitForURL(url=>url.origin===MUSE_ORIGIN&&/^\/thread\/[0-9a-f-]{36}$/i.test(url.pathname),{timeout:60000,waitUntil:'commit'});
       await onConversation({url:page.url()});
+      this.pendingNewChat = false;
       const until=Date.now()+150000;
       while(Date.now()<until){
         if(page.isClosed())throw Error('Muse đã đóng trong lúc phân tích nội dung.');
@@ -198,6 +224,7 @@ export class MuseAdapterV2 extends MuseAdapter {
       if(createHash('sha256').update(previous).digest('hex')===receipt.prompt_sha256){videoPrompt=previous;promptHash=receipt.prompt_sha256;}
     }
     if(receipt?.prompt_sha256&&receipt.prompt_sha256!==promptHash)throw Object.assign(Error('Mẫu prompt hoặc lời thoại đã thay đổi sau lần gửi trước; cần kiểm tra.'),{code:'UNCERTAIN_SUBMISSION',retryable:false});
+    if (this.pendingNewChat) await this.assertNewChatDraft(page);
     await this.closePreview();
     await this.composer().waitFor({state:'visible',timeout:this.composerTimeoutMs});
     let response=await readResponse();
@@ -213,18 +240,27 @@ export class MuseAdapterV2 extends MuseAdapter {
       // A saved receipt means Enter may already have been pressed. Never resend.
       if(receipt)throw Object.assign(Error(`Không tìm thấy yêu cầu cảnh ${scene.index} đã gửi; có thể tiếp tục kiểm tra biên nhận cũ, không gửi lại.`),{code:'SUBMISSION_NOT_FOUND',retryable:true});
       const input=await this.cleanComposer();
+      if (this.pendingNewChat) await this.assertNewChatDraft(page);
       if(imagePath)await this.attachReference(imagePath);
       const dialogue=scene.dialogue?`Đọc lời thoại tiếng Việt đúng nguyên văn, không thêm hoặc bớt. Nếu không có nhân vật trong hình, dùng giọng thuyết minh. Đọc chậm tự nhiên, trải đều lời trong khoảng 65–90% thời lượng cảnh, bắt đầu sớm, không dồn lời rồi kết thúc quá sớm, không kéo dài âm hoặc lặp từ: “${scene.dialogue}”.`: 'Không có lời thoại hoặc giọng nói.';
       const requestText=flexible?videoPrompt:videoPrompt?`${key}. ${videoPrompt}`:isSingleVideoScene(scene)?buildSingleVideoPrompt(job,scene,key):`${key}. Tạo đúng MỘT video độc lập, dùng ảnh đính kèm, ${job.scene_seconds} giây, khổ dọc 9:16. Không dùng dữ liệu từ khách hàng khác hoặc cuộc trò chuyện khác. Không thêm chữ, không đăng mạng xã hội. Nếu không hỗ trợ thời lượng, báo lỗi thay vì tự đổi. ${dialogue} Hành động và biểu cảm: ${scene.action}. Mô tả cảnh: ${scene.prompt}`;
       await input.fill(requestText);
       await sleep(400);
       if(await input.inputValue()!==requestText)throw Object.assign(Error('Ô nhập Muse đã tải lại trước khi gửi; không gửi lời thoại có thể bị thay đổi.'),{code:'MUSE_COMPOSER_RELOADED'});
-      await onBeforeSend({key,url:page.url(),prepared_at:new Date().toISOString(),...(promptHash?{prompt_sha256:promptHash,script_revision:job.script_revision,template_version:job.video_prompt_version}:{})});
+      if (this.pendingNewChat) await this.assertNewChatDraft(page);
+      const preparedUrl = page.url();
+      await onBeforeSend({key,url:preparedUrl,prepared_at:new Date().toISOString(),...(promptHash?{prompt_sha256:promptHash,script_revision:job.script_revision,template_version:job.video_prompt_version}:{})});
       durableReceipt=true;
+      if (page.url() !== preparedUrl || await input.inputValue() !== requestText) {
+        throw Object.assign(Error('Cuộc chat Muse đã thay đổi trước khi gửi. Hệ thống giữ biên nhận để kiểm tra.'), {
+          code:'UNCERTAIN_SUBMISSION', retryable:false
+        });
+      }
       await input.press('Enter');
       if(onConversation){
-        await page.waitForURL(url=>/^\/thread\/[0-9a-f-]{36}$/i.test(url.pathname),{timeout:60000,waitUntil:'commit'});
+        await page.waitForURL(url=>url.origin===MUSE_ORIGIN&&/^\/thread\/[0-9a-f-]{36}$/i.test(url.pathname),{timeout:60000,waitUntil:'commit'});
         await onConversation({url:page.url()});
+        this.pendingNewChat = false;
       }
     }
     const until=Date.now()+(flexible?(this.flexibleTimeoutMs??Math.max(this.sceneTimeoutMs,30*60*1000)):this.sceneTimeoutMs);

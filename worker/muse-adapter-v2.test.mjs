@@ -31,9 +31,75 @@ test('recognizes explicit Vietnamese refusals without requiring the words báo l
   for(const reply of ['Video đang được tạo, vui lòng chờ.','Nếu không hỗ trợ thời lượng, hãy báo lỗi.','If not supported, report an error.'])assert.equal(museVideoRejection(reply),false,reply);
   assert.equal(summarizeMuseReply('Trả tại https://example.com/private?token=secret\n'+ 'A'.repeat(50)), 'Trả tại [liên kết] [mã]');
 });
-test('opens a new side chat even when the Chats label contains the previous title',async()=>{
-  const {adapter,page}=fixture();assert.deepEqual(await adapter.beginJob({id:'fixture'}),{state:'creating'});
-  assert.equal(new URL(page.url()).pathname,'/thread/new');
+function draftFixture({navigate = url => url, bubbles = () => 0} = {}) {
+  const {adapter, page} = fixture();
+  const visited = [];
+  let current = 'https://muse.ai/';
+  page.url = () => current;
+  page.goto = async url => {
+    visited.push(url);
+    current = navigate(url);
+  };
+  page.getByRole = () => assert.fail('Opening a clean composer must not depend on the chat sidebar');
+  page.locator = selector => {
+    assert.equal(selector, '.hatch-chat-groupable-bubble');
+    return {count: async () => bubbles(current)};
+  };
+  adapter.assertConnected = async () => {};
+  adapter.composer = () => ({waitFor: async () => {}, inputValue: async () => ''});
+  adapter.draftSettleMs = 0;
+  return {adapter, page, visited};
+}
+
+test('opens a fresh home composer even when Muse has no chat sidebar', async () => {
+  const {adapter, page, visited} = draftFixture();
+  assert.deepEqual(await adapter.beginJob({id:'fixture'}), {state:'creating'});
+  assert.deepEqual(visited, ['https://muse.ai/']);
+  assert.equal(page.url(), 'https://muse.ai/');
+});
+
+test('falls back to the new chat route when the home page redirects into an existing chat', async () => {
+  const {adapter, visited} = draftFixture({navigate: url => url.endsWith('/thread/new')
+    ? url : 'https://muse.ai/thread/12345678-1234-1234-1234-123456789abc'});
+  assert.deepEqual(await adapter.beginJob({id:'fixture'}), {state:'creating'});
+  assert.deepEqual(visited, ['https://muse.ai/','https://muse.ai/thread/new']);
+});
+
+test('does not use a draft route that still shows another conversation', async () => {
+  const {adapter} = draftFixture({bubbles: () => 1});
+  await assert.rejects(adapter.beginJob({id:'fixture'}), {
+    code:'MUSE_NEW_CHAT_UNAVAILABLE',
+    retryable:true
+  });
+});
+
+test('does not type a new job if Muse leaves its blank draft after opening it', async () => {
+  const {adapter,page} = draftFixture();
+  await adapter.beginJob({id:'fixture'});
+  await page.goto('https://muse.ai/thread/12345678-1234-1234-1234-123456789abc');
+  adapter.cleanComposer = () => assert.fail('No content should be sent to the wrong conversation');
+  const job = {id:'12345678-1234-1234-1234-123456789abc',scene_seconds:10};
+  await assert.rejects(adapter.generateSceneV2(job,{index:1},null), {
+    code:'MUSE_NEW_CHAT_UNAVAILABLE',
+    retryable:true
+  });
+});
+
+test('does not press Enter if the draft navigates during receipt persistence', async () => {
+  const {adapter, page} = draftFixture();
+  await adapter.beginJob({id:'fixture'});
+  const job = {id:'12345678-1234-1234-1234-123456789abc',creation_mode:'video_free',scene_count:1,scene_seconds:null};
+  const scene = {index:1,action:'single_free_video_request',prompt:'Test video',dialogue:''};
+  adapter.sceneResponse = async () => ({requested:false,video:null});
+  let value = '';
+  adapter.cleanComposer = async () => ({
+    fill: async text => { value = text; },
+    inputValue: async () => value,
+    press: async () => assert.fail('Must not submit into another conversation')
+  });
+  await assert.rejects(adapter.generateSceneV2(job,scene,null,{
+    onBeforeSend: async () => { await page.goto('https://muse.ai/thread/12345678-1234-1234-1234-123456789abc'); }
+  }), {code:'UNCERTAIN_SUBMISSION',retryable:false});
 });
 test('resumes only a valid saved chat and stops on an uncertain or unsafe URL',async()=>{
   const {adapter}=fixture(),url='https://muse.ai/thread/12345678-1234-1234-1234-123456789abc';
