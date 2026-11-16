@@ -13,6 +13,7 @@ import {persistJobFailure} from './job-failure.mjs';
 import {LeaseGuard} from './lease-guard.mjs';
 import {runtimeDataDir,encryptedSessionStorage,acquireInstanceLock} from './runtime-state.mjs';
 import {enrollControlDevice} from './control-device.mjs';
+import {deliverCompletedMedia} from './media-delivery.mjs';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const workerVersion=JSON.parse(await readFile(new URL('./package.json',import.meta.url),'utf8')).version;
@@ -89,6 +90,14 @@ try{
       try{
         if(job.schema_version===3&&job.workflow_phase==='script')await processBrandScriptV3(job,{client:supabase,muse,workRoot:downloadsDir,workerId,leaseToken:token});
         else await processBrandJobV2(job,{client:supabase,muse,auditor,workRoot:downloadsDir,workerId,leaseToken:token});
+        // Delivery is deliberately outside the media transaction: a Zalo
+        // outage must never turn a verified video back into a failed job.
+        const latest=await supabase.from('brand_jobs').select('id,content,creation_mode,storage_provider,final_path,status').eq('id',job.id).maybeSingle();
+        if(latest.data?.status==='done'&&latest.data.final_path&&latest.data.creation_mode!=='image'){
+          const delivery=await deliverCompletedMedia({client:supabase,job:latest.data,finalPath:latest.data.final_path,token,origin:process.env.MUSE_MEDIA_GATEWAY_ORIGIN});
+          if(delivery.status==='failed')console.warn(`Giao Zalo thất bại cho ${job.id}: ${delivery.error}`);
+          else if(delivery.status==='sent')console.log(`Đã gửi kết quả ${job.id} tới nhóm Zalo.`);
+        }
         console.log(job.schema_version===3&&job.workflow_phase==='script'?'Kịch bản chờ khách duyệt':'Hoàn tất yêu cầu',job.id);
       }
       catch(error){
