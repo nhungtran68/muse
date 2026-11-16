@@ -14,6 +14,7 @@ import {LeaseGuard} from './lease-guard.mjs';
 import {runtimeDataDir,encryptedSessionStorage,acquireInstanceLock} from './runtime-state.mjs';
 import {enrollControlDevice} from './control-device.mjs';
 import {deliverNextVideo} from './media-delivery.mjs';
+import {syncZaloGroups} from './zalo-groups.mjs';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const workerVersion=JSON.parse(await readFile(new URL('./package.json',import.meta.url),'utf8')).version;
@@ -35,11 +36,19 @@ async function startupStatus(state,error){
 async function call(name,args){const result=await supabase.rpc(name,args);if(result.error)throw result.error;return result.data;}
 let deliveryTimer;
 let deliveryBusy=false;
+let nextZaloGroupSync=0;
+let zaloBridge;
 async function pollVideoDelivery(){
   if(deliveryBusy||lost||!leaseGuard.current())return;
   deliveryBusy=true;
   try{
-    const state=await deliverNextVideo({client:supabase,workerId,leaseToken:token,origin:process.env.MUSE_MEDIA_GATEWAY_ORIGIN});
+    const context={client:supabase,workerId,leaseToken:token,...zaloBridge};
+    if(zaloBridge&&Date.now()>=nextZaloGroupSync){
+      nextZaloGroupSync=Date.now()+60_000;
+      try{await syncZaloGroups(context);}catch{console.warn('Chưa cập nhật được danh sách nhóm Zalo.');}
+    }
+    if(lost||!leaseGuard.current())return;
+    const state=await deliverNextVideo({...context,origin:process.env.MUSE_MEDIA_GATEWAY_ORIGIN});
     if(['failed','uncertain'].includes(state))console.warn('Gửi Zalo cần kiểm tra trong mục Quản trị.');
   }catch{
     console.warn('Chưa cập nhật được trạng thái gửi Zalo.');
@@ -69,6 +78,14 @@ async function renew(){
 try{
   await startupStatus('checking_tools');await checkMediaToolsAvailable();await auditor.checkAvailable();
   await startupStatus('waiting_admin_login');await adminLoginV2(supabase,{interactive:!process.argv.includes('--unattended')&&Boolean(process.stdin.isTTY)});
+  if(process.env.ZALO_VIDEO_BRIDGE_URL?.trim()&&process.env.ZALO_VIDEO_BRIDGE_TOKEN?.trim()){
+    zaloBridge={bridgeUrl:process.env.ZALO_VIDEO_BRIDGE_URL.trim(),bridgeToken:process.env.ZALO_VIDEO_BRIDGE_TOKEN.trim()};
+  }else{
+    try{
+      const saved=JSON.parse(await encryptedSessionStorage(path.join(dataDir,'auth')).getItem('mr-studio-zalo-bridge'));
+      if(saved?.bridgeUrl&&saved?.bridgeToken)zaloBridge={bridgeUrl:saved.bridgeUrl,bridgeToken:saved.bridgeToken};
+    }catch{console.warn('Chưa đọc được cấu hình Zalo trên máy.');}
+  }
   try{await enrollControlDevice(supabase,dataDir);}catch{console.warn('Chưa kết nối điều khiển trên web; worker vẫn hoạt động bình thường.');}
   await startupStatus('waiting_muse_login');await muse.waitForLogin({timeoutMs:Number(process.env.MUSE_LOGIN_TIMEOUT_MS)||600000});
   if(process.argv.includes('--diagnose'))console.log('MUSE_CHECK_OK');
@@ -86,8 +103,7 @@ try{
     timer=setInterval(()=>void renew(),20000);
     safetyTimer=setInterval(()=>{if(!lost&&!leaseGuard.current())void stopForLease(Error('Quyền worker sắp hết hạn và chưa gia hạn được.'));},5000);
     await startupStatus('ready');
-    if(process.env.ZALO_OA_ACCESS_TOKEN?.trim()||
-      (process.env.ZALO_VIDEO_BRIDGE_URL?.trim()&&process.env.ZALO_VIDEO_BRIDGE_TOKEN?.trim())){
+    if(process.env.ZALO_OA_ACCESS_TOKEN?.trim()||zaloBridge){
       deliveryTimer=setInterval(()=>void pollVideoDelivery(),15000);
       void pollVideoDelivery();
     }
