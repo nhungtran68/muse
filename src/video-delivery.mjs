@@ -20,8 +20,9 @@ export async function mountVideoDelivery(grid, client) {
     </form>
     <form data-zalo>
       <label class="toggle"><input type="checkbox" name="enabled"> Gửi video vào nhóm Zalo</label>
-      <label>Mã nhóm Zalo<input name="group" maxlength="100" pattern="[A-Za-z0-9_\\-]{1,100}" autocomplete="off"></label>
-      <p class="admin-note">Áp dụng cho video mới do tài khoản quản trị này tạo sau khi bật. Nhóm kết nối qua Zalo OA nhận liên kết tải có thời hạn.</p>
+      <label>Nhóm Zalo<select name="group"><option value="">Chọn nhóm Zalo</option></select></label>
+      <p class="admin-note" data-group-status aria-live="polite"></p>
+      <p class="admin-note">Áp dụng cho video mới do tài khoản quản trị này tạo sau khi bật.</p>
       <button class="outline" type="submit" disabled>Lưu lựa chọn Zalo</button>
     </form>
     <p role="status">Đang tải cài đặt…</p>
@@ -31,6 +32,32 @@ export async function mountVideoDelivery(grid, client) {
   const zalo = card.querySelector('[data-zalo]');
   const status = card.querySelector('[role=status]');
   const list = card.querySelector('ul');
+  const groupSelect = zalo.elements.group;
+  const groupStatus = card.querySelector('[data-group-status]');
+  let selectedGroup = '';
+  let groupSelectionEdited = false;
+  let groupSignature = '';
+
+  async function refreshGroups() {
+    try {
+      const {data,error} = await client.rpc('list_zalo_groups');
+      if (!card.isConnected) return;
+      if (error) throw error;
+      const groups = Array.isArray(data?.groups) ? data.groups : [];
+      const signature = JSON.stringify(groups);
+      if (signature !== groupSignature) {
+        groupSignature = signature;
+        groupSelect.replaceChildren(new Option('Chọn nhóm Zalo', ''),
+          ...groups.map(group => new Option(group.name, group.id)));
+      }
+      groupSelect.value = groups.some(group => group.id === selectedGroup) ? selectedGroup : '';
+      groupStatus.textContent = !data?.available ? 'Đang chờ máy xử lý đồng bộ danh sách nhóm Zalo.'
+        : !groups.length ? 'Tài khoản Zalo đang kết nối hiện không có nhóm.'
+        : selectedGroup && !groupSelect.value ? 'Nhóm đã lưu không còn trong danh sách. Hãy chọn nhóm khác.' : '';
+    } catch {
+      if (card.isConnected) groupStatus.textContent = 'Chưa tải được danh sách nhóm Zalo.';
+    }
+  }
 
   function showRecent(data) {
     list.replaceChildren(...(data.recent ?? []).map(item => {
@@ -48,12 +75,13 @@ export async function mountVideoDelivery(grid, client) {
       if (initial) {
         storage.elements.storage.value = data.r2 ? 'r2' : 'supabase';
         zalo.elements.enabled.checked = data.zalo;
-        zalo.elements.group.value = data.group_id || '';
+        if (!groupSelectionEdited) selectedGroup = data.group_id || '';
         zalo.elements.group.required = data.zalo;
         for (const button of card.querySelectorAll('button')) button.disabled = false;
         status.textContent = '';
       }
       showRecent(data);
+      await refreshGroups();
     } catch {
       if (initial) status.textContent = 'Chưa tải được cài đặt phân phối. Hãy tải lại trang.';
     }
@@ -83,7 +111,11 @@ export async function mountVideoDelivery(grid, client) {
     zalo.elements.group.required = zalo.elements.enabled.checked;
   });
   bindSave(storage, 'set_video_storage', () => ({p_r2: storage.elements.storage.value === 'r2'}));
-  bindSave(zalo, 'set_zalo_delivery', () => ({
+  groupSelect.addEventListener('change', () => {
+    groupSelectionEdited = true;
+    selectedGroup = groupSelect.value;
+  });
+  bindSave(zalo, 'choose_zalo_group', () => ({
     p_enabled: zalo.elements.enabled.checked,
     p_group_id: zalo.elements.group.value.trim()
   }));
