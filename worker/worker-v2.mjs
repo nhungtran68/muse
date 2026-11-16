@@ -13,7 +13,7 @@ import {persistJobFailure} from './job-failure.mjs';
 import {LeaseGuard} from './lease-guard.mjs';
 import {runtimeDataDir,encryptedSessionStorage,acquireInstanceLock} from './runtime-state.mjs';
 import {enrollControlDevice} from './control-device.mjs';
-import {deliverCompletedMedia} from './media-delivery.mjs';
+import {deliverNextVideo} from './media-delivery.mjs';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const workerVersion=JSON.parse(await readFile(new URL('./package.json',import.meta.url),'utf8')).version;
@@ -33,6 +33,18 @@ async function startupStatus(state,error){
   await writeFile(path.join(dataDir,'startup-status.json'),JSON.stringify({state,version:workerVersion,pid:process.pid,worker_id:workerId,time:new Date().toISOString(),...(error?{code:error.code||'STARTUP_ERROR',message:String(error.message||'').split('\n')[0].replace(/[A-Za-z0-9_-]{40,}/g,'[redacted]').slice(0,300)}:{})}));
 }
 async function call(name,args){const result=await supabase.rpc(name,args);if(result.error)throw result.error;return result.data;}
+let deliveryTimer;
+let deliveryBusy=false;
+async function pollVideoDelivery(){
+  if(deliveryBusy||lost||!leaseGuard.current())return;
+  deliveryBusy=true;
+  try{
+    const state=await deliverNextVideo({client:supabase,workerId,leaseToken:token,origin:process.env.MUSE_MEDIA_GATEWAY_ORIGIN});
+    if(['failed','uncertain'].includes(state))console.warn('Gửi Zalo cần kiểm tra trong mục Quản trị.');
+  }catch{
+    console.warn('Chưa cập nhật được trạng thái gửi Zalo.');
+  }finally{deliveryBusy=false;}
+}
 async function stopForLease(error){
   if(lost)return;lost=true;
   await startupStatus('error',error).catch(()=>{});
@@ -74,6 +86,11 @@ try{
     timer=setInterval(()=>void renew(),20000);
     safetyTimer=setInterval(()=>{if(!lost&&!leaseGuard.current())void stopForLease(Error('Quyền worker sắp hết hạn và chưa gia hạn được.'));},5000);
     await startupStatus('ready');
+    if(process.env.ZALO_OA_ACCESS_TOKEN?.trim()||
+      (process.env.ZALO_VIDEO_BRIDGE_URL?.trim()&&process.env.ZALO_VIDEO_BRIDGE_TOKEN?.trim())){
+      deliveryTimer=setInterval(()=>void pollVideoDelivery(),15000);
+      void pollVideoDelivery();
+    }
     console.log(`Worker đã sẵn sàng (bản ${workerVersion}). Giữ cửa sổ này và Muse mở.`);
     while(!lost){
       // Reopen the same persistent profile before claiming customer work if
@@ -90,14 +107,6 @@ try{
       try{
         if(job.schema_version===3&&job.workflow_phase==='script')await processBrandScriptV3(job,{client:supabase,muse,workRoot:downloadsDir,workerId,leaseToken:token});
         else await processBrandJobV2(job,{client:supabase,muse,auditor,workRoot:downloadsDir,workerId,leaseToken:token});
-        // Delivery is deliberately outside the media transaction: a Zalo
-        // outage must never turn a verified video back into a failed job.
-        const latest=await supabase.from('brand_jobs').select('id,content,creation_mode,storage_provider,final_path,status').eq('id',job.id).maybeSingle();
-        if(latest.data?.status==='done'&&latest.data.final_path&&latest.data.creation_mode!=='image'){
-          const delivery=await deliverCompletedMedia({client:supabase,job:latest.data,finalPath:latest.data.final_path,token,origin:process.env.MUSE_MEDIA_GATEWAY_ORIGIN});
-          if(delivery.status==='failed')console.warn(`Giao Zalo thất bại cho ${job.id}: ${delivery.error}`);
-          else if(delivery.status==='sent')console.log(`Đã gửi kết quả ${job.id} tới nhóm Zalo.`);
-        }
         console.log(job.schema_version===3&&job.workflow_phase==='script'?'Kịch bản chờ khách duyệt':'Hoàn tất yêu cầu',job.id);
       }
       catch(error){
@@ -111,6 +120,7 @@ try{
   }
 }catch(error){if(requestedStop)await startupStatus('stopped').catch(()=>{});else{await startupStatus('error',error).catch(()=>{});console.error('Không chạy được worker:',error.message);process.exitCode=1;}}
 finally{
+  if(deliveryTimer)clearInterval(deliveryTimer);
   if(timer)clearInterval(timer);
   if(safetyTimer)clearInterval(safetyTimer);
   if(token)await call('release_muse_worker',{p_worker:workerId,p_token:token}).catch(()=>{});

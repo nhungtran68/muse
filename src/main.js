@@ -11,6 +11,7 @@ import './pwa.js';
 import {displayMessage} from './display-text.mjs';
 import {renderConsent} from './oauth-consent.mjs';
 import {renderGrants} from './oauth-grants.mjs';
+import {mountVideoDelivery} from './video-delivery.mjs';
 
 const root = document.querySelector('#app');
 const supabase = supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
@@ -555,23 +556,7 @@ function renderAdmin() {
     const {error}=await supabase.from('app_settings').update(values).eq('id',true);if(error)return message(error.message,'error');settings={...settings,...values};message('Đã lưu cài đặt.','success');renderModule();
   });
   refreshAdmin();
-  enhanceAdminDeliveryControls();
-}
-
-function enhanceAdminDeliveryControls(){
-  const form=document.querySelector('#settings-form');
-  if(!form||document.querySelector('#output-storage'))return;
-  form.insertAdjacentHTML('beforeend',`<hr><h3>Ph�n ph?i k?t qu?</h3><label>Kho l?u tr?<select id="output-storage"><option value="r2" ${settings.output_storage==='r2'?'selected':''}>R2</option><option value="supabase" ${settings.output_storage==='supabase'?'selected':''}>Supabase Storage</option></select></label><label class="toggle"><input id="send-zalo" type="checkbox" ${settings.send_outputs_to_zalo?'checked':''}><span>G?i video ho�n t?t t?i nh�m Zalo</span></label><label>M� nh�m Zalo<input id="zalo-group-id" value="${safe(settings.zalo_group_id||'')}" placeholder="ID nh�m/OA target"></label><p class="admin-note">Hai t�y ch?n n�y ch? c� hi?u l?c khi qu?n tr? vi�n b?t v� l?u. Zalo d�ng webhook/OA c?u h�nh ph�a m�y ch?.</p>`);
-  const submit=form.querySelector('[type="submit"]');
-  form.addEventListener('submit',async event=>{
-    if(event.defaultPrevented)return;
-    event.preventDefault();event.stopImmediatePropagation();
-    const values={enabled:document.querySelector('#enabled').checked,daily_limit:Number(document.querySelector('#daily-limit').value),updated_at:new Date().toISOString()};
-    const base=await supabase.from('app_settings').update(values).eq('id',true);if(base.error)return message(base.error.message,'error');
-    const result=await supabase.rpc('update_media_delivery_settings',{p_output_storage:document.querySelector('#output-storage').value,p_send_outputs_to_zalo:document.querySelector('#send-zalo').checked,p_zalo_group_id:document.querySelector('#zalo-group-id').value.trim()});
-    if(result.error)return message(result.error.message,'error');
-    settings={...settings,...values,...result.data};message('Da luu c�i d?t.','success');renderModule();
-  },{capture:true});
+  mountVideoDelivery(document.querySelector('#admin .admin-grid'),supabase);
 }
 
 async function refreshControlStatus(){

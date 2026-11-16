@@ -1,12 +1,18 @@
-# Gửi video hoàn tất tới nhóm Zalo
+# Phân phối video trong Mr Studio
 
-Chức năng này có hai công tắc chỉ quản trị viên nhìn thấy:
+Trong **Quản trị → Phân phối video**, lưu riêng lựa chọn kho và lựa chọn Zalo.
+Kho R2 dùng cấu hình hiện có. Đổi kho chỉ áp dụng cho yêu cầu mới và giữ quy tắc xóa file hiện tại.
+Zalo mặc định tắt cho mọi tài khoản. Khi bật, chỉ video mới của chính quản trị viên đã bật được gửi tới nhóm họ chọn.
 
-- Kho kết quả: `R2` hoặc `Supabase Storage`.
-- Gửi video hoàn tất tới nhóm Zalo.
+## Cấu hình máy xử lý
 
-Khi bật gửi Zalo, hệ thống cần một `ZALO_GROUP_WEBHOOK_URL` ở môi trường worker. URL này nên trỏ tới một workflow n8n/Make hoặc endpoint Zalo Official Account/GMF đã được cấp quyền gửi tới nhóm. Token Zalo không lưu trong `app_settings` và không đưa vào trình duyệt.
+- Nhóm Zalo đã kết nối cầu nối video nội bộ: đặt `ZALO_VIDEO_BRIDGE_URL` và `ZALO_VIDEO_BRIDGE_TOKEN` trong môi trường riêng của máy xử lý. Worker gửi file MP4 và đọc biên nhận theo ID tác vụ. Dùng HTTPS hoặc kết nối loopback cùng máy.
+- Nhóm Zalo OA (GMF): đặt `ZALO_OA_ACCESS_TOKEN` có quyền quản lý nhóm. Worker gửi liên kết MP4 có hiệu lực tối đa 10 phút. Zalo OA yêu cầu cập nhật token khi hết hạn.
 
-Mỗi job chỉ được claim một lần cho từng nhóm; gửi trùng bị chặn trong 15 phút. Lỗi giao Zalo được ghi ở `media_deliveries` và không làm job video chuyển thành lỗi. Liên kết media có thời hạn ngắn, vì vậy bridge phải tải hoặc chuyển tiếp ngay khi nhận webhook.
+Khởi động lại worker để nạp cấu hình. Khóa chỉ lưu trong môi trường vận hành. Gửi lỗi không đổi trạng thái của video. Khi phía nhận chưa xác nhận, hãy kiểm tra nhóm trước khi gửi thủ công để tránh trùng.
 
-Sau khi triển khai migration, quản trị viên vào mục **Quản trị → Phân phối kết quả**, chọn kho, bật gửi Zalo, nhập mã nhóm/OA target rồi lưu. Nếu chưa cấu hình webhook, video vẫn hoàn tất bình thường và trạng thái giao sẽ là chưa cấu hình.
+## Triển khai và khôi phục
+
+Áp dụng migration `20261116120000_admin_media_delivery.sql`, sau đó cập nhật website và worker.
+Kiểm thử bằng video kiểm tra do quản trị viên tạo trong nhóm chỉ định.
+Khi cần dừng, bỏ chọn gửi Zalo trong Quản trị. Có thể đưa web và worker về phiên bản trước và giữ lại các bảng lịch sử. Khôi phục lựa chọn kho về giá trị ban đầu nếu đã đổi.
