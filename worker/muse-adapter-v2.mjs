@@ -33,7 +33,7 @@ export function museVideoRejection(text){
     // A quoted instruction such as "If unsupported, report an error" is not
     // itself a refusal. Only inspect statements from this request's reply.
     if(/^\s*(?:nếu|if)(?:\s|[:,])/iu.test(sentence))return false;
-    return /(?:(?:không|chưa)\s+thể\s+(?:tạo|xuất|render|giao|trả|cung cấp)(?:\s+được)?\s+(?:file\s+)?(?:video|clip|mp4)|không\s+(?:tạo|xuất|render|giao|trả|gửi)\s+được\s+(?:file\s+)?(?:video|clip|mp4)|không\s+(?:giao|trả|gửi)\s+(?:file\s+)?(?:video|clip|mp4)|(?:không|chưa)(?:\s+được)?\s+hỗ trợ|not supported|(?:cannot|can't|unable to)\s+(?:create|generate|render|deliver|provide)(?:\s+\w+){0,3}\s+(?:video|clip|mp4))/iu.test(sentence);
+    return /(?:(?:không|chưa)\s+thể\s+(?:tạo|xuất|render|giao|trả|cung cấp)(?:\s+được)?\s+(?:file\s+)?(?:video|clip|mp4)|không\s+(?:tạo|xuất|render|giao|trả|gửi)\s+được\s+(?:file\s+)?(?:video|clip|mp4)|không\s+(?:giao|trả|gửi)\s+(?:file\s+)?(?:video|clip|mp4)|(?:không|chưa)\s+(?:thể\s+)?(?:đọc|xử lý|chỉnh sửa)(?:\s+được)?\s+(?:(?:tệp|file)\s+)?(?:video|mp4)|(?:không|chưa)(?:\s+được)?\s+hỗ trợ|not supported|(?:cannot|can't|unable to)\s+(?:create|generate|render|deliver|provide|read|edit)(?:\s+\w+){0,3}\s+(?:video|clip|mp4))/iu.test(sentence);
   });
 }
 
@@ -241,7 +241,10 @@ export class MuseAdapterV2 extends MuseAdapter {
       if(receipt)throw Object.assign(Error(`Không tìm thấy yêu cầu cảnh ${scene.index} đã gửi; có thể tiếp tục kiểm tra biên nhận cũ, không gửi lại.`),{code:'SUBMISSION_NOT_FOUND',retryable:true});
       const input=await this.cleanComposer();
       if (this.pendingNewChat) await this.assertNewChatDraft(page);
-      if(imagePath)await this.attachReference(imagePath);
+      if(imagePath){
+        if(job.reference_kind==='video')await this.attachVideoReference(imagePath);
+        else await this.attachReference(imagePath);
+      }
       const dialogue=scene.dialogue?`Đọc lời thoại tiếng Việt đúng nguyên văn, không thêm hoặc bớt. Nếu không có nhân vật trong hình, dùng giọng thuyết minh. Đọc chậm tự nhiên, trải đều lời trong khoảng 65–90% thời lượng cảnh, bắt đầu sớm, không dồn lời rồi kết thúc quá sớm, không kéo dài âm hoặc lặp từ: “${scene.dialogue}”.`: 'Không có lời thoại hoặc giọng nói.';
       const requestText=flexible?videoPrompt:videoPrompt?`${key}. ${videoPrompt}`:isSingleVideoScene(scene)?buildSingleVideoPrompt(job,scene,key):`${key}. Tạo đúng MỘT video độc lập, dùng ảnh đính kèm, ${job.scene_seconds} giây, khổ dọc 9:16. Không dùng dữ liệu từ khách hàng khác hoặc cuộc trò chuyện khác. Không thêm chữ, không đăng mạng xã hội. Nếu không hỗ trợ thời lượng, báo lỗi thay vì tự đổi. ${dialogue} Hành động và biểu cảm: ${scene.action}. Mô tả cảnh: ${scene.prompt}`;
       await input.fill(requestText);

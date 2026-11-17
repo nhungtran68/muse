@@ -163,6 +163,41 @@ export class MuseAdapter {
     }
     throw Error('Không thấy nút tải ảnh tham chiếu trên Muse. Giao diện Muse có thể đã đổi.');
   }
+  async attachVideoReference(filePath){
+    const p=this.requirePage(),filename=path.basename(filePath);
+    const composer=p.locator('[data-hatch-composer-chrome]');
+    if(await composer.count()!==1)throw Object.assign(Error('Không xác định được ô chat Muse; yêu cầu chưa được gửi.'),{code:'MUSE_VIDEO_UPLOAD_UNAVAILABLE',retryable:false});
+    const inputs=composer.locator('input[type="file"]');let attached=false;
+    for(let i=0;i<await inputs.count();i++){
+      const item=inputs.nth(i),accept=(await item.getAttribute('accept')||'').toLowerCase();
+      if(!accept||accept.includes('video/')||accept.includes('.mp4')||accept.includes('*/*')){
+        await item.setInputFiles(filePath);attached=true;break;
+      }
+    }
+    if(!attached){
+      const button=composer.locator('button[aria-label="Đính kèm file"],button[aria-label="Đính kèm tệp"],button[aria-label="Attach file"],button[aria-label="Attach files"],button[aria-label="Upload file"]');
+      if(await button.count()!==1)throw Object.assign(Error('Không thấy nơi đính kèm video trên Muse; yêu cầu chưa được gửi.'),{code:'MUSE_VIDEO_UPLOAD_UNAVAILABLE',retryable:false});
+      const chooser=p.waitForEvent('filechooser',{timeout:10000});
+      await button.click();await (await chooser).setFiles(filePath);
+    }
+    // Refuse to send when the composer does not show the named attachment or
+    // an upload is still in progress. The real provider UI must be verified
+    // before enabling video editing for customers.
+    const label=composer.getByRole('img',{name:filename,exact:true});
+    const send=composer.locator('button[data-pel-click="chat_send_message"]');
+    const timeout=this.videoUploadTimeoutMs??60000,poll=this.videoUploadPollMs??500;
+    try{
+      await label.waitFor({state:'visible',timeout});
+      const busy=p.locator('[role="progressbar"], [aria-busy="true"]');
+      const deadline=Date.now()+timeout;
+      while(Date.now()<deadline){
+        let any=false;for(let i=0;i<await busy.count();i++)if(await busy.nth(i).isVisible().catch(()=>false)){any=true;break;}
+        if(!any&&await label.isVisible()&&await send.isEnabled())return;
+        await new Promise(resolve=>setTimeout(resolve,poll));
+      }
+    }catch{}
+    throw Object.assign(Error('Chưa xác nhận được Muse đã tải xong video nguồn; yêu cầu chưa được gửi.'),{code:'MUSE_VIDEO_UPLOAD_UNCONFIRMED',retryable:false});
+  }
   async downloadScene(fileId){
     const p=this.requirePage();
     const dialog=this.preview();

@@ -33,6 +33,18 @@ test('only the owning member can sign the exact reference and bound its size',as
  assert.equal(state.signatures[0].command.input.ContentLength,42);assert.equal(state.signatures[0].command.input.ContentType,'image/png');
  state.rejectTracking=true;assert.equal((await call('owner',body)).status,409);assert.equal(state.signatures.length,1,'never sign an upload that cannot be tracked');
 });
+test('video input is accepted only for the owning typed job and is bounded independently',async()=>{
+ const {state,call}=setup(),body={action:'put',jobId,bucket:'brand-references',path:reference,size:20*1024*1024,contentType:'video/mp4'};
+ assert.equal((await call('owner',body)).status,400);
+ state.job.reference_kind='video';
+ assert.equal((await call('other',body)).status,404);
+ assert.equal((await call('owner',{...body,contentType:'image/png'})).status,400);
+ assert.equal((await call('owner',{...body,size:25*1024*1024+1})).status,400);
+ assert.equal((await call('owner',body)).status,200);
+ state.objects.set('references/'+reference,{ContentLength:body.size,ContentType:'video/mp4'});
+ assert.equal((await call('owner',{...body,action:'finalize'})).status,200);
+ assert.equal(state.markers.get('brand-references/'+reference).options.contentType,'video/mp4');
+});
 test('only the leased admin can upload a result up to 100 MiB',async()=>{
  const {state,call}=setup();state.job.status='generating';
  const body={action:'put',jobId,bucket:'brand-videos',path:output,size:75*1024*1024,contentType:'video/mp4'};
