@@ -2,7 +2,7 @@ import {createClient} from '@supabase/supabase-js';
 import {adminEmail, supabaseKey, supabaseUrl} from './config.js';
 import {validateEditedDialogue} from '../shared/brand-video-prompt.mjs';
 import {CREATION_MODES,getCreationMode,isSingleMediaScene} from '../shared/creation-modes.mjs';
-import {normalizeReferenceImages} from './image-normalization.mjs';
+import {normalizeReferenceImages,prepareIndependentReferences} from './image-normalization.mjs';
 import {hasUncertainSubmission, visibleSceneStatus} from './job-recovery.mjs';
 import {uploadMedia,downloadMedia,signedMediaUrl} from '../shared/media-storage.mjs';
 import './styles.css';
@@ -18,8 +18,8 @@ const supabase = supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 const safe = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const shortDate = value => new Intl.DateTimeFormat('vi-VN',{dateStyle:'short',timeStyle:'short'}).format(new Date(value));
 const labels = {uploading:'Đang tải ảnh',queued:'Đang xếp hàng',planning:'AI chia cảnh',generating:'Đang tạo cảnh',joining:'Đang ghép',done:'Hoàn tất',needs_review:'Cần kiểm tra',reviewed:'Đã kiểm tra'};
-let session = null, profile = null, settings = null, modes = [], poller = null, previewUrl = null, jobsSignature = '', appEpoch = 0, jobsRefreshVersion = 0, sceneRetryAvailable = null, jobsVisibleCount = 3, jobsTotalCount = 0, retentionClock = null;
-let preparedReference=null,referenceNormalizationSequence=0;
+let session = null, profile = null, settings = null, modes = [], poller = null, previewUrls = [], jobsSignature = '', appEpoch = 0, jobsRefreshVersion = 0, sceneRetryAvailable = null, jobsVisibleCount = 3, jobsTotalCount = 0, retentionClock = null;
+let preparedReferences=[],referenceNormalizationSequence=0;
 let controlStatusLoading=false,controlStarting=false;
 const retryingJobs=new Set(),retryingScenes=new Set();
 const retentionExpiredRefreshes=new Set();
@@ -76,11 +76,11 @@ function renderModule() {
     on('#claim-form','submit',async event=>{event.preventDefault();const code=document.querySelector('#claim-code').value.trim();const {error}=await supabase.rpc('claim_admin',{setup_code:code});if(error)return message(error.message,'error');await loadApp();});
     return;
   }
-  preparedReference=null;referenceNormalizationSequence++;
+  preparedReferences=[];referenceNormalizationSequence++;
   section.innerHTML=`<div class="composer-card"><form id="create-form" class="single-composer">
     <div class="composer-mode"><label for="creation-mode">Chế độ tạo</label><div class="mode-select-wrap"><select id="creation-mode" aria-describedby="mode-description">${CREATION_MODES.map(mode=>`<option value="${mode.id}">${mode.label}</option>`).join('')}</select><span aria-hidden="true">⌄</span></div></div>
     <label class="sr-only" for="content">Mô tả nội dung muốn tạo</label><textarea id="content" rows="5" minlength="10" maxlength="4000" required></textarea>
-    <div class="composer-attachments"><input id="reference" type="file" accept="image/png,image/jpeg,image/webp" multiple><label class="attach-control" for="reference"><span class="attach-icon" aria-hidden="true">＋</span><span id="file-name">Thêm ảnh tham chiếu</span></label><button id="remove-reference" class="text-button remove-reference" type="button" hidden>Xóa ảnh</button><small id="reference-hint">JPG, PNG hoặc WebP · tối đa 4 ảnh, 10 MB/ảnh</small><span id="reference-file-list" class="reference-file-list" hidden></span><img id="image-preview" alt="Khung ảnh tham chiếu sẽ gửi" hidden><span class="image-processing-status" id="image-processing-status" role="status" aria-live="polite"></span></div>
+    <div class="composer-attachments"><input id="reference" type="file" accept="image/png,image/jpeg,image/webp" multiple><label class="attach-control" for="reference"><span class="attach-icon" aria-hidden="true">＋</span><span id="file-name">Thêm ảnh tham chiếu</span></label><button id="remove-reference" class="text-button remove-reference" type="button" hidden>Xóa ảnh</button><small id="reference-hint">JPG, PNG hoặc WebP · tối đa 5 ảnh, 10 MB/ảnh</small><span id="reference-file-list" class="reference-file-list" hidden></span><span id="reference-previews" class="reference-previews" hidden><img id="image-preview" alt="Ảnh tham chiếu 1" hidden></span><span class="image-processing-status" id="image-processing-status" role="status" aria-live="polite"></span></div>
     <div class="composer-bottom"><span class="mode-note" id="mode-description" aria-live="polite"></span><button class="primary create-button" type="submit">Gửi <span aria-hidden="true">↑</span></button></div>
     <p class="consent"><span aria-hidden="true">ⓘ</span> Yêu cầu và ảnh đính kèm được xử lý qua hệ thống của đơn vị vận hành. Mỗi lần gửi nhận một kết quả.</p>${settings.enabled?'':'<p class="inline-warning">Quản trị viên đang tạm dừng nhận yêu cầu.</p>'}</form></div><p class="composer-footnote" id="composer-footnote"></p>`;
   const form=section.querySelector('#create-form'),modeInput=section.querySelector('#creation-mode');
@@ -88,23 +88,26 @@ function renderModule() {
   const referenceInput=section.querySelector('#reference');
   const imageStatus=section.querySelector('#image-processing-status');
   const createButton=section.querySelector('.create-button');
-  const syncCreateButton=()=>{const mode=getCreationMode(modeInput.value);createButton.disabled=form.dataset.busy==='true'||!settings.enabled||(mode.id==='video_10s'&&!modes.some(item=>item.seconds===10))||(mode.referenceRequired&&!preparedReference)||(Boolean(referenceInput.files[0])&&!preparedReference);};
+  const syncCreateButton=()=>{const mode=getCreationMode(modeInput.value);createButton.disabled=form.dataset.busy==='true'||!settings.enabled||(mode.id==='video_10s'&&!modes.some(item=>item.seconds===10))||(mode.referenceRequired&&!preparedReferences.length)||(referenceInput.files.length!==preparedReferences.length);};
   const prepareImage=async()=>{
     const mode=getCreationMode(modeInput.value);
     const sequence=++referenceNormalizationSequence,files=Array.from(referenceInput.files),file=files[0],image=section.querySelector('#image-preview');
     const fileList=section.querySelector('#reference-file-list');fileList.replaceChildren();fileList.hidden=!files.length;
     for(const selected of files){const item=document.createElement('span');item.textContent=selected.name;fileList.append(item);}
-    preparedReference=null;syncCreateButton();
+    preparedReferences=[];syncCreateButton();
     section.querySelector('#remove-reference').hidden=!file;
-    if(previewUrl){URL.revokeObjectURL(previewUrl);previewUrl=null;}
+    previewUrls.forEach(url=>URL.revokeObjectURL(url));previewUrls=[];
+    const previews=section.querySelector('#reference-previews');previews.querySelectorAll('img:not(#image-preview)').forEach(item=>item.remove());previews.hidden=true;
     if(!file){image.hidden=true;image.removeAttribute('src');section.querySelector('#file-name').textContent='Thêm ảnh tham chiếu';imageStatus.textContent='';imageStatus.dataset.state='';return;}
-    image.hidden=true;image.removeAttribute('src');section.querySelector('#file-name').textContent=files.length>1?`${files.length} ảnh đã chọn`:file.name;imageStatus.textContent=files.length>1?'Đang sắp xếp ảnh vào một khung tham chiếu…':mode.id==='video_10s'?'Đang chuẩn hóa ảnh theo khung dọc 9:16…':'Đang kiểm tra ảnh tham chiếu…';imageStatus.dataset.state='working';
+    image.hidden=true;image.removeAttribute('src');section.querySelector('#file-name').textContent=files.length>1?`${files.length} ảnh đã chọn`:file.name;imageStatus.textContent=mode.id==='video_10s'?'Đang chuẩn hóa từng ảnh theo khung dọc 9:16…':'Đang kiểm tra từng ảnh tham chiếu…';imageStatus.dataset.state='working';
     try{
-      const result=await normalizeReferenceImages(files,{preserveAspect:mode.id!=='video_10s'});
+      const results=await prepareIndependentReferences(files,{preserveAspect:mode.id!=='video_10s'});
       if(sequence!==referenceNormalizationSequence)return;
-      preparedReference=result.file;previewUrl=URL.createObjectURL(result.file);image.src=previewUrl;image.hidden=false;
-      section.querySelector('#file-name').textContent=result.collage?`${files.length} ảnh tham chiếu`:result.preserved?file.name:`${file.name} · đã chuẩn hóa 9:16`;
-      imageStatus.textContent=result.collage?`Đã ghép ${files.length} ảnh vào một khung 9:16 để gửi cùng một yêu cầu. Giữ nguyên tỷ lệ từng ảnh, không sửa ảnh gốc.`:result.preserved?`Ảnh ${result.width} × ${result.height} · giữ nguyên tỷ lệ gốc.`:result.padded?`Đã xử lý thành ảnh 720 × 1280. Giữ nguyên tỷ lệ, thêm phần đệm để không cắt mất nội dung.`:`Đã xử lý thành ảnh 720 × 1280 (9:16), không kéo méo ảnh.`;
+      preparedReferences=results.map(result=>result.file);previewUrls=preparedReferences.map(item=>URL.createObjectURL(item));
+      image.src=previewUrls[0];image.hidden=false;previews.hidden=false;
+      for(let index=1;index<previewUrls.length;index++){const thumb=document.createElement('img');thumb.src=previewUrls[index];thumb.alt=`Ảnh tham chiếu ${index+1}`;previews.append(thumb);}
+      section.querySelector('#file-name').textContent=files.length>1?`${files.length} ảnh tham chiếu`:results[0].preserved?file.name:`${file.name} · đã chuẩn hóa 9:16`;
+      imageStatus.textContent=files.length>1?`Đã chuẩn bị ${files.length} ảnh độc lập. Mỗi ảnh được gửi riêng, không ghép ảnh và không sửa ảnh gốc.`:results[0].preserved?`Ảnh ${results[0].width} × ${results[0].height} · giữ nguyên tỷ lệ gốc.`:results[0].padded?`Đã xử lý thành ảnh 720 × 1280. Giữ nguyên tỷ lệ, thêm phần đệm để không cắt mất nội dung.`:`Đã xử lý thành ảnh 720 × 1280 (9:16), không kéo méo ảnh.`;
       imageStatus.dataset.state='ready';
     }catch(error){
       if(sequence!==referenceNormalizationSequence)return;
@@ -117,7 +120,7 @@ function renderModule() {
     const mode=getCreationMode(modeInput.value);referenceInput.required=mode.referenceRequired;
     section.querySelector('#content').placeholder=mode.placeholder;
     section.querySelector('#mode-description').textContent=mode.id==='video_10s'&&!modes.some(item=>item.seconds===10)?'Chế độ 10 giây đang tạm tắt':mode.hint;
-    section.querySelector('#reference-hint').textContent=`${mode.referenceRequired?'Cần ít nhất 1 ảnh':'Ảnh không bắt buộc'} · JPG, PNG, WebP · tối đa 4 ảnh, 10 MB/ảnh`;
+    section.querySelector('#reference-hint').textContent=`${mode.referenceRequired?'Cần ít nhất 1 ảnh':'Ảnh không bắt buộc'} · JPG, PNG, WebP · tối đa 5 ảnh, 10 MB/ảnh`;
     section.querySelector('#composer-footnote').textContent=mode.id==='image'?'Thêm ảnh tham chiếu nếu cần giữ chủ thể hoặc phong cách. Kết quả là một ảnh để xem và tải xuống.':mode.id==='video_free'?'Nhập độ dài và khung hình mong muốn trong mô tả. Hệ thống tự xử lý và ghép thành một video hoàn chỉnh.':'Thêm ảnh tham chiếu. Kết quả là một video dọc 10 giây theo mô tả của bạn.';
     syncCreateButton();
   };
@@ -138,35 +141,46 @@ async function submitBrand(event) {
   const userId=session?.user.id;
   if(!userId)return;
   const submitClient=createClient(supabaseUrl,supabaseKey,{global:{headers:{Authorization:'Bearer '+session.access_token}},auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
-  const selectedFile=document.querySelector('#reference').files[0],file=preparedReference;
-  if(selectedFile&&!file)return message(document.querySelector('#image-processing-status')?.textContent||'Ảnh đang được xử lý. Hãy chờ hoàn tất rồi thử lại.','error');
+  const selectedFiles=Array.from(document.querySelector('#reference').files),files=preparedReferences;
+  if(selectedFiles.length!==files.length)return message(document.querySelector('#image-processing-status')?.textContent||'Ảnh đang được xử lý. Hãy chờ hoàn tất rồi thử lại.','error');
   const mode=getCreationMode(form.querySelector('#creation-mode').value);
   const outputR2=mode.id!=='image'&&form.querySelector('[name=output-r2]')?.checked===true;
   const zaloOption=form.querySelector('[name=output-zalo]');
   const sendZalo=mode.id!=='image'&&zaloOption?.checked ? (zaloOption.value||null) : null;
-  if(mode.referenceRequired&&!file)return message('Chọn ảnh JPG, PNG hoặc WebP để tiếp tục.','error');
+  if(mode.referenceRequired&&!files.length)return message('Chọn ảnh JPG, PNG hoặc WebP để tiếp tục.','error');
   const content=document.querySelector('#content').value.trim();
   if(content.length<10)return message('Hãy mô tả yêu cầu, tối thiểu 10 ký tự.','error');
   if(mode.id==='video_10s'&&!modes.some(item=>item.seconds===10))return message('Chế độ video 10 giây đang tạm tắt. Hãy chọn chế độ khác hoặc báo quản trị viên.','error');
   form.dataset.busy='true';form.querySelectorAll('input,textarea,select,button').forEach(input=>input.disabled=true);
   const button=event.submitter||form.querySelector('[type=submit]');button.textContent='Đang gửi…';message('Đang gửi yêu cầu xử lý…');
   try{
-    const referenceHash=file?await fileHash(file):null;
+    const referenceHashes=await Promise.all(files.map(fileHash));
     if(session?.user.id!==userId)return;
-    const fingerprint=await fileHash(new Blob([JSON.stringify(['single-media-v1',userId,content,mode.id,referenceHash,outputR2,sendZalo])]));
+    const fingerprint=await fileHash(new Blob([JSON.stringify(referenceHashes.length>1?['single-media-v2',userId,content,mode.id,referenceHashes,outputR2,sendZalo]:['single-media-v1',userId,content,mode.id,referenceHashes[0]||null,outputR2,sendZalo])]));
     const storageKey='muse-single-media-submit:'+userId;
     let pending;try{pending=JSON.parse(localStorage.getItem(storageKey));}catch{}
     if(!pending||pending.fingerprint!==fingerprint)pending={id:crypto.randomUUID(),key:crypto.randomUUID(),fingerprint};
     localStorage.setItem(storageKey,JSON.stringify(pending));
-    const args={p_id:pending.id,p_request_key:pending.key,p_content:content,p_mode:mode.id,p_reference_sha256:referenceHash};
+    const args={p_id:pending.id,p_request_key:pending.key,p_content:content,p_mode:mode.id,p_reference_sha256:referenceHashes[0]||null};
     const created=mode.id==='image'?await submitClient.rpc('submit_single_media_job',args):
       await submitClient.rpc('submit_video_with_distribution',{...args,p_r2:outputR2,p_zalo_group:sendZalo});
     if(created.error)throw created.error;
     const job=created.data;
     if(job.status==='uploading'){
-      if(!file)throw Error('Yêu cầu này cần tải lại ảnh tham chiếu.');
-      try{await uploadMedia(submitClient,{provider:job.reference_storage_provider,bucket:'brand-references',path:job.reference_path,jobId:job.id,token:session.access_token,contentType:file.type,data:file});}
-      catch(error){if(job.reference_storage_provider==='r2')throw error;const existing=await submitClient.storage.from('brand-references').download(job.reference_path);if(existing.error||await fileHash(existing.data)!==referenceHash)throw error;}
+      if(!files.length)throw Error('Yêu cầu này cần tải lại ảnh tham chiếu.');
+      let entries=[{path:job.reference_path,sha256:referenceHashes[0]}];
+      if(files.length>1){
+        const configured=await submitClient.rpc('set_job_reference_images',{p_id:job.id,p_hashes:referenceHashes});
+        if(configured.error)throw configured.error;
+        entries=configured.data.reference_images;
+      }
+      if(entries.length!==files.length)throw Error('Số ảnh tham chiếu của yêu cầu không khớp.');
+      for(let index=0;index<files.length;index++){
+        const file=files[index],entry=entries[index];
+        if(entry.sha256!==referenceHashes[index])throw Error('Ảnh tham chiếu của yêu cầu không khớp.');
+        try{await uploadMedia(submitClient,{provider:job.reference_storage_provider,bucket:'brand-references',path:entry.path,jobId:job.id,token:session.access_token,contentType:file.type,data:file});}
+        catch(error){if(job.reference_storage_provider==='r2')throw error;const existing=await submitClient.storage.from('brand-references').download(entry.path);if(existing.error||await fileHash(existing.data)!==entry.sha256)throw error;}
+      }
       const queued=await submitClient.rpc('queue_brand_job',{p_id:job.id});if(queued.error)throw queued.error;
     }
     localStorage.removeItem(storageKey);
@@ -174,8 +188,9 @@ async function submitBrand(event) {
     message(`Đã gửi một yêu cầu hoàn chỉnh (${mode.label}). Theo dõi trong “Kết quả của tôi”.`,'success');
     document.querySelector('#create-form').reset();document.querySelector('#content').dispatchEvent(new Event('input'));
     form.querySelector('#creation-mode').value=mode.id;
-    preparedReference=null;referenceNormalizationSequence++;if(previewUrl){URL.revokeObjectURL(previewUrl);previewUrl=null;}
+    preparedReferences=[];referenceNormalizationSequence++;previewUrls.forEach(url=>URL.revokeObjectURL(url));previewUrls=[];
     document.querySelector('#image-preview').hidden=true;document.querySelector('#image-preview').removeAttribute('src');document.querySelector('#file-name').textContent='Thêm ảnh tham chiếu';
+    const previews=document.querySelector('#reference-previews');previews.querySelectorAll('img:not(#image-preview)').forEach(item=>item.remove());previews.hidden=true;
     const fileList=document.querySelector('#reference-file-list');fileList?.replaceChildren();if(fileList)fileList.hidden=true;
     const imageStatus=document.querySelector('#image-processing-status');if(imageStatus){imageStatus.textContent='';imageStatus.dataset.state='';}
     form.querySelector('#remove-reference').hidden=true;
@@ -380,7 +395,7 @@ async function refreshJobs({force=false}={}) {
   if(!session||!document.querySelector('#jobs-list'))return;
   if(!force&&[...document.querySelectorAll('.script-editor')].some(editor=>editor.contains(document.activeElement)||editor.dataset.dirty==='true'||editor.dataset.busy==='true'))return;
   const userId=session.user.id,version=++jobsRefreshVersion;
-  const result=await supabase.from('brand_jobs').select('id,user_id,content,scene_count,scene_seconds,creation_mode,reference_kind,storage_provider,output_r2_selected,reference_storage_provider,final_probe,status,current_scene,reference_path,reference_expires_at,reference_sha256,final_path,output_expires_at,retention_status,retention_attempts,retention_next_attempt_at,error,error_code,retryable,attempt,max_attempts,schema_version,workflow_phase,script_revision,allow_summarize,plan,created_at,brand_scenes(scene_index,prompt,dialogue,action,planned_seconds,status,submission_state,request_receipt,output_path,output_expires_at,error,error_code,generation)',{count:'exact'}).eq('user_id',userId).order('created_at',{ascending:false}).order('id',{ascending:false}).range(0,jobsVisibleCount-1);
+  const result=await supabase.from('brand_jobs').select('id,user_id,content,scene_count,scene_seconds,creation_mode,reference_kind,storage_provider,output_r2_selected,reference_storage_provider,final_probe,status,current_scene,reference_path,reference_images,reference_expires_at,reference_sha256,final_path,output_expires_at,retention_status,retention_attempts,retention_next_attempt_at,error,error_code,retryable,attempt,max_attempts,schema_version,workflow_phase,script_revision,allow_summarize,plan,created_at,brand_scenes(scene_index,prompt,dialogue,action,planned_seconds,status,submission_state,request_receipt,output_path,output_expires_at,error,error_code,generation)',{count:'exact'}).eq('user_id',userId).order('created_at',{ascending:false}).order('id',{ascending:false}).range(0,jobsVisibleCount-1);
   const list=document.querySelector('#jobs-list');if(!list||session?.user.id!==userId||version!==jobsRefreshVersion)return;
   if(!force&&[...list.querySelectorAll('.script-editor')].some(editor=>editor.contains(document.activeElement)||editor.dataset.dirty==='true'||editor.dataset.busy==='true'))return;
   if(result.error){list.textContent='Không tải được lịch sử: '+displayMessage(result.error.message);updateJobsPagination();return;}
@@ -465,12 +480,17 @@ async function refreshJobs({force=false}={}) {
       edit.disabled=true;
       const actor=createClient(supabaseUrl,supabaseKey,{global:{headers:{Authorization:'Bearer '+session.access_token}},auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
       try{
-        const image=await downloadMedia(actor,{provider:job.reference_storage_provider,bucket:'brand-references',path:job.reference_path,jobId:job.id,token:session.access_token});
-        if(await fileHash(image)!==job.reference_sha256)throw Error('Ảnh đã lưu không khớp ảnh ban đầu.');
+        const references=Array.isArray(job.reference_images)&&job.reference_images.length?job.reference_images:[{path:job.reference_path,sha256:job.reference_sha256}];
+        const images=[];
+        for(const entry of references){
+          const image=await downloadMedia(actor,{provider:job.reference_storage_provider,bucket:'brand-references',path:entry.path,jobId:job.id,token:session.access_token});
+          if(await fileHash(image)!==entry.sha256)throw Error('Ảnh đã lưu không khớp ảnh ban đầu.');
+          images.push(image);
+        }
         if(session?.user.id!==userId||!edit.isConnected)return;
         const content=document.querySelector('#content'),reference=document.querySelector('#reference');if(!content||!reference)return;
         content.value=job.content;
-        const files=new DataTransfer();files.items.add(new File([image],'anh-tham-chieu',{type:image.type}));reference.files=files.files;
+        const files=new DataTransfer();images.forEach((image,index)=>files.items.add(new File([image],`anh-tham-chieu-${index+1}`,{type:image.type})));reference.files=files.files;
         reference.dispatchEvent(new Event('change'));content.dispatchEvent(new Event('input'));
         document.querySelector('#brand').scrollIntoView({behavior:'smooth'});
         message('Đã điền lại ảnh và yêu cầu. Kiểm tra nội dung rồi bấm “Gửi” để tạo một video mới.','info');
@@ -479,16 +499,23 @@ async function refreshJobs({force=false}={}) {
     });
   }
   list.querySelectorAll('.resume-file').forEach(input=>input.addEventListener('change',async()=>{
-    let file=input.files[0];const job=result.data.find(item=>item.id===input.dataset.id);
-    if(!file||!job||input.disabled||session?.user.id!==userId)return;
+    const selected=Array.from(input.files),job=result.data.find(item=>item.id===input.dataset.id);
+    if(!selected.length||!job||input.disabled||session?.user.id!==userId)return;
     input.disabled=true;
     try{
-      if(await fileHash(file)!==job.reference_sha256)file=(await normalizeReferenceImages(input.files,{preserveAspect:job.creation_mode!=='video_10s'})).file;
-      if(await fileHash(file)!==job.reference_sha256)throw Error('Ảnh không khớp ảnh đã chọn ban đầu. Hãy chọn lại ảnh gốc trên thiết bị đã gửi yêu cầu.');
+      const entries=Array.isArray(job.reference_images)&&job.reference_images.length?job.reference_images:[{path:job.reference_path,sha256:job.reference_sha256}];
+      let files;
+      if(entries.length===1&&selected.length>1)files=[(await normalizeReferenceImages(selected,{preserveAspect:job.creation_mode!=='video_10s'})).file];
+      else files=(await prepareIndependentReferences(selected,{preserveAspect:job.creation_mode!=='video_10s'})).map(item=>item.file);
+      if(files.length!==entries.length)throw Error('Hãy chọn lại đúng số ảnh của yêu cầu ban đầu.');
+      for(let index=0;index<files.length;index++)if(await fileHash(files[index])!==entries[index].sha256)throw Error(`Ảnh ${index+1} không khớp ảnh đã chọn ban đầu. Hãy chọn lại đúng ảnh và thứ tự.`);
       if(session?.user.id!==userId||!input.isConnected)return;
       const token=session.access_token,actor=createClient(supabaseUrl,supabaseKey,{global:{headers:{Authorization:'Bearer '+token}},auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
-      try{await uploadMedia(actor,{provider:job.reference_storage_provider,bucket:'brand-references',path:job.reference_path,jobId:job.id,token,contentType:file.type,data:file});}
-      catch(error){if(job.reference_storage_provider==='r2')throw error;const old=await actor.storage.from('brand-references').download(job.reference_path);if(old.error||await fileHash(old.data)!==job.reference_sha256)throw error;}
+      for(let index=0;index<files.length;index++){
+        const file=files[index],entry=entries[index];
+        try{await uploadMedia(actor,{provider:job.reference_storage_provider,bucket:'brand-references',path:entry.path,jobId:job.id,token,contentType:file.type,data:file});}
+        catch(error){if(job.reference_storage_provider==='r2')throw error;const old=await actor.storage.from('brand-references').download(entry.path);if(old.error||await fileHash(old.data)!==entry.sha256)throw error;}
+      }
       if(session?.user.id!==userId||!input.isConnected)return;
       const queued=await actor.rpc('queue_brand_job',{p_id:job.id});if(queued.error)throw queued.error;
       message('Đã đưa yêu cầu vào hàng chờ.','success');await refreshJobs();

@@ -5,16 +5,10 @@ import {joinScenes,probeVideo,validateScene} from './ffmpeg.mjs';
 import {isSingleVideoScene} from '../shared/single-video-request.mjs';
 import {isFlexibleMediaJob} from '../shared/creation-modes.mjs';
 import {processSingleMediaJob} from './single-media.mjs';
+import {downloadImageReferences} from './reference-images.mjs';
 import {downloadMedia,uploadMedia} from '../shared/media-storage.mjs';
 
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
-function extension(bytes){
-  if(bytes.length<100||bytes.length>10*1024*1024)throw Error('Ảnh tham chiếu không hợp lệ.');
-  if(bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])))return 'png';
-  if(bytes[0]===255&&bytes[1]===216)return 'jpg';
-  if(bytes.toString('ascii',0,4)==='RIFF'&&bytes.toString('ascii',8,12)==='WEBP')return 'webp';
-  throw Error('Ảnh tham chiếu sai định dạng.');
-}
 async function rpc(client,name,args){const result=await client.rpc(name,args);if(result.error)throw result.error;return result.data;}
 async function download(client,bucket,key,job){const provider=bucket==='brand-references'?job.reference_storage_provider:job.storage_provider;const file=await downloadMedia(client,{provider,bucket,path:key,jobId:job.id,origin:process.env.MUSE_MEDIA_GATEWAY_ORIGIN});return Buffer.from(await file.arrayBuffer());}
 async function upload(client,key,file,job){await uploadMedia(client,{provider:job.storage_provider,bucket:'brand-videos',path:key,jobId:job.id,origin:process.env.MUSE_MEDIA_GATEWAY_ORIGIN,contentType:'video/mp4',data:await readFile(file)});}
@@ -23,9 +17,7 @@ export async function processBrandScriptV3(job,{client,muse,workRoot,workerId,le
   if(job.schema_version!==3||job.status!=='planning'||job.workflow_phase!=='script'||job.scene_seconds!==10||!job.claim_token)throw Error('Yêu cầu kịch bản không hợp lệ.');
   const auth={p_id:job.id,p_worker:workerId,p_token:leaseToken,p_claim:job.claim_token};
   const dir=path.join(workRoot,job.id,job.claim_token);await mkdir(dir,{recursive:true});
-  const reference=await download(client,'brand-references',job.reference_path,job);
-  if(sha256(reference)!==job.reference_sha256)throw Object.assign(Error('Ảnh tham chiếu không khớp với ảnh đã gửi.'),{code:'REFERENCE_MISMATCH',retryable:false});
-  const image=path.join(dir,'reference.'+extension(reference));await writeFile(image,reference);
+  const image=await downloadImageReferences(job,{client,dir});
   const conversation=await muse.beginJob(job);
   await rpc(client,'update_brand_job_v2',{...auth,p_patch:{conversation_ref:conversation}});
   const storyboard=await muse.storyboard(job,image,{onConversation:ref=>rpc(client,'update_brand_job_v2',{...auth,p_patch:{conversation_ref:ref}})});
@@ -40,9 +32,7 @@ export async function processBrandJobV2(job,{client,muse,auditor,workRoot,worker
   const updateJob=patch=>rpc(client,'update_brand_job_v2',{...auth,p_patch:patch});
   const updateScene=(index,patch)=>rpc(client,'update_brand_scene_v2',{...auth,p_scene:index,p_patch:patch});
   const dir=path.join(workRoot,job.id,job.claim_token);await mkdir(dir,{recursive:true});
-  const reference=await download(client,'brand-references',job.reference_path,job);
-  if(sha256(reference)!==job.reference_sha256)throw Object.assign(Error('Ảnh tham chiếu không khớp với ảnh đã gửi.'),{code:'REFERENCE_MISMATCH',retryable:false});
-  const image=path.join(dir,'reference.'+extension(reference));await writeFile(image,reference);
+  const image=await downloadImageReferences(job,{client,dir});
   const conversation=await muse.beginJob(job);
   await updateJob({conversation_ref:conversation});
   let plan=job.plan;

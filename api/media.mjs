@@ -17,8 +17,9 @@ function validateName(name,job){
   if(typeof name!=='string'||!name.startsWith(`${job.user_id}/${job.id}/`)||name.length>800||name.includes('\\')||name.split('/').some(part=>!part||part==='.'||part==='..'))fail(400,'Đường dẫn file không hợp lệ.');
 }
 function isBeforeExpiry(expiry,now){return !expiry||Number.isFinite(Date.parse(expiry))&&Date.parse(expiry)>now;}
+function isJobReference(job,name){return job.reference_path===name||Array.isArray(job.reference_images)&&job.reference_images.some(item=>item?.path===name);}
 function validPathForRead(job,bucket,name,now){
-  if(bucket===REFERENCE_BUCKET)return job.reference_path===name&&isBeforeExpiry(job.reference_expires_at,now);
+  if(bucket===REFERENCE_BUCKET)return isJobReference(job,name)&&isBeforeExpiry(job.reference_expires_at,now);
   if(job.retention_status==='expired')return false;
   const active=ACTIVE.has(job.status);
   if(job.status==='done'&&job.final_path===name&&isBeforeExpiry(job.output_expires_at,now))return true;
@@ -48,7 +49,7 @@ export function createMediaHandler({makeClient=createClient,s3,sign=getSignedUrl
       const token=authorization.match(/^Bearer\s+(.+)$/i)?.[1];if(!token)fail(401,'Cần đăng nhập.');
       const client=makeClient(projectUrl,publicKey,{global:{headers:{Authorization:`Bearer ${token}`}},auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
       const auth=await client.auth.getUser(token);if(auth.error||!auth.data?.user?.id)fail(401,'Phiên đăng nhập đã hết hạn.');
-      const query=await client.from('brand_jobs').select('id,user_id,status,reference_kind,reference_path,reference_expires_at,storage_provider,reference_storage_provider,final_path,output_expires_at,retention_status,brand_scenes(scene_index,status,output_path,output_expires_at)').eq('id',jobId).maybeSingle();
+      const query=await client.from('brand_jobs').select('id,user_id,status,reference_kind,reference_path,reference_images,reference_expires_at,storage_provider,reference_storage_provider,final_path,output_expires_at,retention_status,brand_scenes(scene_index,status,output_path,output_expires_at)').eq('id',jobId).maybeSingle();
       const job=query.data;if(query.error||!job)fail(404,'Không tìm thấy yêu cầu.');
       const name=body.path;validateName(name,job);
       if(providerFor(job,bucket)!=='r2')fail(409,'File này không nằm trong kho R2.');
@@ -71,7 +72,7 @@ export function createMediaHandler({makeClient=createClient,s3,sign=getSignedUrl
       if(!Number.isSafeInteger(size)||size<1||size>sizeLimit||!TYPES[bucket].has(contentType)
         ||bucket===REFERENCE_BUCKET&&(videoReference?contentType!=='video/mp4':contentType==='video/mp4'))fail(400,'Dung lượng hoặc định dạng file không hợp lệ.');
       if(bucket===REFERENCE_BUCKET){
-        if(job.user_id!==auth.data.user.id||job.status!=='uploading'||job.reference_path!==name)fail(403,'Không có quyền tải ảnh cho yêu cầu này.');
+        if(job.user_id!==auth.data.user.id||job.status!=='uploading'||!isJobReference(job,name))fail(403,'Không có quyền tải ảnh cho yêu cầu này.');
       }else{
         const allowed=await client.rpc('can_upload_brand_video',{p_name:name});
         if(allowed.error||allowed.data!==true)fail(403,'Worker chưa có quyền lưu kết quả này.');

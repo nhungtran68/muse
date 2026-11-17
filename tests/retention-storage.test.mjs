@@ -26,6 +26,13 @@ test('removes only this job’s final, scene, and reference paths by bucket',asy
   ]);
 });
 
+test('deletes all five independent reference files after their shared expiry',async()=>{
+  const paths=[job.reference_path,...[2,3,4,5].map(index=>`${job.user_id}/${job.job_id}/reference-${index}`)];
+  const calls=[];
+  const result=await deleteJobOutputs({async remove(bucket,items){calls.push({bucket,items});return {error:null};}},{...job,final_path:null,scene_paths:[],reference_paths:paths});
+  assert.equal(result.ok,true);assert.deepEqual(calls,[{bucket:'brand-references',items:paths}]);
+});
+
 test('continues cleanup after a bucket error and reports failure for retry',async()=>{
   const calls=[];
   const result=await deleteJobOutputs({async remove(bucket,paths){

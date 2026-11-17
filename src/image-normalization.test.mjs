@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {containImageRect,referenceTileRects,normalizeReferenceImages} from './image-normalization.mjs';
+import {containImageRect,referenceTileRects,normalizeReferenceImages,prepareIndependentReferences} from './image-normalization.mjs';
 
 test('contains a landscape image inside the vertical video frame without cropping or distortion',()=>{
   const rect=containImageRect(1920,1080);
@@ -31,4 +31,8 @@ test('fits up to four reference images into separate, nonoverlapping tiles',()=>
 
 test('rejects more than four images before opening them',async()=>{
   await assert.rejects(normalizeReferenceImages(Array(5).fill({})),/tối đa 4 ảnh/);
+});
+
+test('independent references reject a sixth image before opening any file',async()=>{
+  await assert.rejects(prepareIndependentReferences(Array(6).fill({})),/tối đa 5 ảnh/);
 });

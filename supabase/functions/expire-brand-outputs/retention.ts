@@ -3,6 +3,7 @@ export interface RetentionClaim {
   user_id: string;
   final_path: string | null;
   reference_path: string | null;
+  reference_paths?: string[];
   scene_paths: Array<{ scene_index: number; path: string }>;
   retention_attempt: number;
   retention_claim_token: string;
@@ -40,12 +41,12 @@ export async function deleteJobOutputs(
     job.final_path,
     ...job.scene_paths.map((scene) => scene.path),
   ].filter((path): path is string => Boolean(path)))];
-  const referencePaths = job.reference_path ? [job.reference_path] : [];
+  const referencePaths = job.reference_path ? [...new Set([job.reference_path,...(job.reference_paths??[])])] : [];
 
   if (
     !videoPaths.every((path) => isSafeJobPath(path, ownerPrefix)) ||
     (job.reference_path !== null && job.reference_path !== `${ownerPrefix}reference`) ||
-    !referencePaths.every((path) => isSafeJobPath(path, `${ownerPrefix}reference`))
+    !referencePaths.every((path) => path===`${ownerPrefix}reference`||/^reference-[2-5]$/.test(path.slice(ownerPrefix.length))&&isSafeJobPath(path, ownerPrefix))
   ) {
     return { ok: false, failures: [{ bucket: "validation", error: new Error("Job contains an out-of-scope Storage path") }] };
   }

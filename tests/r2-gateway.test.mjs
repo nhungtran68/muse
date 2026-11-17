@@ -33,6 +33,15 @@ test('only the owning member can sign the exact reference and bound its size',as
  assert.equal(state.signatures[0].command.input.ContentLength,42);assert.equal(state.signatures[0].command.input.ContentType,'image/png');
  state.rejectTracking=true;assert.equal((await call('owner',body)).status,409);assert.equal(state.signatures.length,1,'never sign an upload that cannot be tracked');
 });
+test('each independently stored reference is limited to its owning job',async()=>{
+ const {state,call}=setup(),second=`${owner}/${jobId}/reference-2`;
+ state.job.reference_images=[{path:reference,sha256:'a'.repeat(64)},{path:second,sha256:'b'.repeat(64)}];
+ const body={action:'put',jobId,bucket:'brand-references',path:second,size:100,contentType:'image/jpeg'};
+ assert.equal((await call('owner',body)).status,200);
+ assert.equal((await call('other',body)).status,404);
+ assert.equal((await call('owner',{...body,path:`${owner}/${jobId}/reference-3`})).status,403);
+ assert.equal((await call('owner',{...body,action:'get'})).status,200);
+});
 test('video input is accepted only for the owning typed job and is bounded independently',async()=>{
  const {state,call}=setup(),body={action:'put',jobId,bucket:'brand-references',path:reference,size:20*1024*1024,contentType:'video/mp4'};
  assert.equal((await call('owner',body)).status,400);
