@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {MuseAdapterV2,museVideoRejection,summarizeMuseReply} from './muse-adapter-v2.mjs';
 import {chromium} from 'playwright';
 import {installedBrowserExecutable} from './muse-adapter.mjs';
-import {mkdtemp,readFile,rm} from 'node:fs/promises';
+import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 
@@ -25,6 +25,8 @@ test('recognizes explicit Vietnamese refusals without requiring the words báo l
     'Thời lượng 8 giây không được hỗ trợ trong lần tạo này.',
     'Mình chưa thể xuất file MP4.',
     'Tôi không tạo được video.',
+    'Mình không thể đọc tệp video đính kèm.',
+    'Mình không chỉnh sửa được video này.',
     'Báo lỗi cho đoạn 1/3 GEN_0, mình không giao clip này: bản tạo ra đúng 10,0 giây và có track AAC, nhưng khung hình là 960x960 vuông, không phải dọc 9:16 như yêu cầu. Theo đúng chỉ dẫn của bạn, mình đã không tự cắt hay kéo giãn về 720x1280. Bạn có muốn mình thử lại một lần với mã mới không?',
     'I am unable to generate a video for this request.'
   ])assert.equal(museVideoRejection(reply),true,reply);
@@ -210,6 +212,37 @@ test('a new single video request persists the Muse receipt before sending and ma
   assert.equal(result.path,'single.mp4');assert.equal(beforeSend,1);assert.equal(sent,1);assert.equal(submitted,1);
   assert.match(draft,/đúng một video dài 10 giây/);assert.match(draft,/không chia thành nhiều video/);
   assert.equal(page.url(),'https://muse.ai/thread/12345678-1234-1234-1234-123456789abc');
+});
+
+test('video edit never sends when source upload cannot be confirmed',async()=>{
+ const {adapter}=fixture(),job={id:'12345678-1234-1234-1234-123456789abc',schema_version:2,creation_mode:'video_free',reference_kind:'video',reference_path:'source',scene_count:1,content:'Cắt video còn 5 giây'};
+ const scene={index:1,prompt:job.content,action:'single_free_video_request'};let sends=0,receipts=0;
+ adapter.sceneResponse=async()=>({requested:false,video:null});adapter.cleanComposer=async()=>({fill:async()=>{},press:async()=>sends++});
+ adapter.attachVideoReference=async()=>{throw Object.assign(Error('upload unconfirmed'),{code:'MUSE_VIDEO_UPLOAD_UNCONFIRMED'})};
+ await assert.rejects(adapter.generateSceneV2(job,scene,'reference.mp4',{onBeforeSend:async()=>receipts++}),{code:'MUSE_VIDEO_UPLOAD_UNCONFIRMED'});
+ assert.equal(sends,0);assert.equal(receipts,0);
+});
+test('video upload waits for the named Muse thumbnail and an enabled send control',async t=>{
+ const root=await mkdtemp(path.join(tmpdir(),'muse-video-upload-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const source=path.join(root,'input.mp4');await writeFile(source,'test');
+ const browser=await chromium.launch({headless:true,...(installedBrowserExecutable()?{executablePath:installedBrowserExecutable()}:{})});t.after(()=>browser.close());
+ const page=await browser.newPage();
+ await page.setContent(`<div data-hatch-composer-chrome><input type="file"><button data-pel-click="chat_send_message" disabled>Gửi</button></div><script>
+ const root=document.querySelector('[data-hatch-composer-chrome]');
+ root.querySelector('input').addEventListener('change',()=>{setTimeout(()=>{const img=document.createElement('img');img.alt='input.mp4';img.src='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';root.append(img)},30);setTimeout(()=>root.querySelector('button').disabled=false,100)});
+ </script>`);
+ const adapter=new MuseAdapterV2('','');adapter.requirePage=()=>page;adapter.videoUploadTimeoutMs=2000;adapter.videoUploadPollMs=10;
+ await adapter.attachVideoReference(source);assert.equal(await page.locator('button').isEnabled(),true);assert.equal(await page.getByRole('img',{name:'input.mp4'}).isVisible(),true);
+});
+test('video edit submits its attached source once after a durable receipt',async()=>{
+ const {adapter}=fixture(),job={id:'12345678-1234-1234-1234-123456789abc',schema_version:2,creation_mode:'video_free',reference_kind:'video',reference_path:'source',scene_count:1,content:'Cắt video còn 5 giây'};
+ const scene={index:1,prompt:job.content,action:'single_free_video_request'};let draft='',sends=0,attached=0,receipts=0,reads=0;
+ const input={fill:async value=>draft=value,inputValue:async()=>draft,press:async()=>{assert.equal(receipts,1);sends++}};
+ adapter.cleanComposer=async()=>input;adapter.attachReference=async()=>assert.fail('Video must not use the image uploader');adapter.attachVideoReference=async file=>{assert.equal(file,'reference.mp4');attached++};
+ adapter.sceneResponse=async()=>++reads===1?{requested:false,video:null}:{requested:true,video:{click:async()=>{},dispose:async()=>{}}};
+ adapter.assertConnected=async()=>{};adapter.downloadScene=async()=>({path:'edited.mp4'});adapter.pollMs=1;adapter.sceneTimeoutMs=1000;adapter.flexibleTimeoutMs=1000;adapter.mediaSettleMs=0;
+ const result=await adapter.generateSceneV2(job,scene,'reference.mp4',{onBeforeSend:async()=>receipts++,onSubmitted:async()=>{}});
+ assert.equal(result.path,'edited.mp4');assert.equal(attached,1);assert.equal(sends,1);assert.match(draft,/Cắt video còn 5 giây/);assert.match(draft,/VIDEO MP4 ĐÍNH KÈM/);
 });
 
 test('reports the scoped assistant refusal and never resends a recorded scene',async()=>{

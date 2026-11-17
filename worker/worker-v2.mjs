@@ -15,6 +15,7 @@ import {runtimeDataDir,encryptedSessionStorage,acquireInstanceLock} from './runt
 import {enrollControlDevice} from './control-device.mjs';
 import {deliverNextVideo} from './media-delivery.mjs';
 import {syncZaloGroups} from './zalo-groups.mjs';
+import {cleanupVideoEditTemp} from './video-edit-temp.mjs';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const workerVersion=JSON.parse(await readFile(new URL('./package.json',import.meta.url),'utf8')).version;
@@ -36,7 +37,9 @@ async function startupStatus(state,error){
 async function call(name,args){const result=await supabase.rpc(name,args);if(result.error)throw result.error;return result.data;}
 let deliveryTimer;
 let deliveryBusy=false;
+let videoEditCapability=false;
 let nextZaloGroupSync=0;
+let nextVideoTempCleanup=0;
 let zaloBridge;
 async function pollVideoDelivery(){
   if(deliveryBusy||lost||!leaseGuard.current())return;
@@ -100,6 +103,13 @@ try{
     while(!lost&&!(await renew()))await sleep(5000);
     if(lost)throw Error('Không thể giữ quyền worker.');
     await call('register_r2_worker',{p_worker:workerId,p_token:token});
+    if(process.env.MUSE_ENABLE_VIDEO_EDIT!=='0'){
+      try{await call('register_video_edit_worker',{p_worker:workerId,p_token:token});videoEditCapability=true;}
+      catch(error){
+        if(!['PGRST202','42883'].includes(error?.code))throw error;
+        console.warn('Chỉnh sửa video chưa được cấu hình; các chức năng khác vẫn hoạt động.');
+      }
+    }
     timer=setInterval(()=>void renew(),20000);
     safetyTimer=setInterval(()=>{if(!lost&&!leaseGuard.current())void stopForLease(Error('Quyền worker sắp hết hạn và chưa gia hạn được.'));},5000);
     await startupStatus('ready');
@@ -109,6 +119,10 @@ try{
     }
     console.log(`Worker đã sẵn sàng (bản ${workerVersion}). Giữ cửa sổ này và Muse mở.`);
     while(!lost){
+      if(Date.now()>=nextVideoTempCleanup){
+        nextVideoTempCleanup=Date.now()+15*60*1000;
+        try{await cleanupVideoEditTemp(downloadsDir);}catch{console.warn('Chưa kiểm tra được video nguồn tạm.');}
+      }
       // Reopen the same persistent profile before claiming customer work if
       // Chrome was closed or the Muse session requires authentication again.
       let composerReady=false;try{composerReady=await muse.composer().isVisible();}catch{}
@@ -116,6 +130,10 @@ try{
         await startupStatus('waiting_muse_login');await muse.waitForLogin();
         if(lost)break;await startupStatus('ready');
       }else await muse.assertConnected();
+      if(videoEditCapability){
+        try{await call('schedule_video_edit_recovery',{p_worker:workerId,p_token:token});}
+        catch{console.warn('Chưa thể xếp lại yêu cầu chỉnh sửa bị gián đoạn; các yêu cầu khác vẫn tiếp tục.');}
+      }
       // A failed claim may have succeeded remotely. Never blindly resubmit it.
       const job=await claimNextBrandJob(call,{p_worker:workerId,p_token:token});
       if(lost)break;

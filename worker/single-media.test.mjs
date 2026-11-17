@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,createHash} from 'node:crypto';
 import {mkdtemp,readFile,rm,truncate} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
-import {processSingleMediaJob} from './single-media.mjs';
+import {processSingleMediaJob,validateVideoSource} from './single-media.mjs';
 import {buildFlexibleMediaPrompt} from '../shared/creation-modes.mjs';
 
 function fixture(mode){
@@ -38,6 +38,52 @@ test('a timed-out free request retains its receipt and never completes or upload
  const muse={beginJob:async()=>({url:'https://muse.ai/thread/'+randomUUID()}),async generateSceneV2(_j,_s,_i,{receipt}){assert.equal(receipt.key,'original-request');throw Object.assign(Error('Still rendering'),{code:'MUSE_TIMEOUT',retryable:true});}};
  await assert.rejects(processSingleMediaJob(job,{client,muse,workRoot:root,workerId:randomUUID(),leaseToken:randomUUID()}),{code:'MUSE_TIMEOUT'});
  assert.equal(scene.request_receipt.key,'original-request');assert.equal(scene.status,'error');assert.equal(objects.size,0);assert.equal(calls.some(call=>call.name==='complete_single_media_job'),false);
+});
+
+test('video editing is gated and preserves the verified source while writing the matching R2 result',async t=>{
+ const root=await mkdtemp(path.join(tmpdir(),'muse-video-edit-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const file=await mediaFile(root,'video'),source=await readFile(file),{job,client,calls,scene}=fixture('video_free');
+ Object.assign(job,{reference_kind:'video',reference_path:`${job.user_id}/${job.id}/reference`,reference_sha256:createHash('sha256').update(source).digest('hex'),reference_storage_provider:'r2',storage_provider:'r2',output_r2_selected:true});
+ const log=[],originalFetch=globalThis.fetch;t.after(()=>{globalThis.fetch=originalFetch});
+ client.auth={getSession:async()=>({data:{session:{access_token:'fixture'}}})};
+ globalThis.fetch=async(url,options={})=>{
+  const name=String(url);if(name==='https://source.example/file')return new Response(source);
+  if(name==='https://output.example/file'){assert.equal(options.method,'PUT');log.push('put');return new Response(null,{status:200});}
+  const body=JSON.parse(options.body);log.push(body.action);
+  return Response.json({url:body.action==='get'?'https://source.example/file':'https://output.example/file'});
+ };
+ const muse={beginJob:async()=>({state:'creating'}),async generateSceneV2(seen,_s,input,callbacks){
+  assert.equal(seen.id,job.id);assert.deepEqual(await readFile(input),source);await callbacks.onBeforeSend({key:'receipt'});await callbacks.onSubmitted();return {path:file};
+ }};
+ const ctx={client,muse,workRoot:root,workerId:randomUUID(),leaseToken:randomUUID()};
+ await assert.rejects(processSingleMediaJob(job,{...ctx,videoEditEnabled:false}),{code:'VIDEO_EDIT_UNAVAILABLE'});assert.equal(calls.length,0);
+ const result=await processSingleMediaJob(job,{...ctx,videoEditEnabled:true});
+ assert.ok(result.startsWith(`${job.user_id}/${job.id}/${job.claim_token}/`));assert.deepEqual(log,['get','put','put','finalize']);
+ assert.equal(scene.request_receipt.key,'receipt');assert.equal(calls.filter(c=>c.name==='complete_single_media_job').length,1);
+});
+test('invalid and oversized video sources are rejected before sending',()=>{
+ assert.throws(()=>validateVideoSource(Buffer.from('not an mp4')),{code:'VIDEO_INPUT_INVALID'});
+ assert.throws(()=>validateVideoSource(Buffer.alloc(25*1024*1024+1)),{code:'VIDEO_INPUT_TOO_LARGE'});
+});
+test('R2 upload failure retains the Muse receipt and resumes the same result without another submission',async t=>{
+ const root=await mkdtemp(path.join(tmpdir(),'muse-video-r2-retry-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const file=await mediaFile(root,'video'),source=await readFile(file),{job,client,calls,scene}=fixture('video_free');
+ Object.assign(job,{reference_kind:'video',reference_path:`${job.user_id}/${job.id}/reference`,reference_sha256:createHash('sha256').update(source).digest('hex'),reference_storage_provider:'r2',storage_provider:'r2',output_r2_selected:true});
+ scene.request_receipt={key:'original-receipt'};scene.submission_state='sent';
+ client.auth={getSession:async()=>({data:{session:{access_token:'fixture'}}})};
+ const originalFetch=globalThis.fetch;t.after(()=>{globalThis.fetch=originalFetch});let fail=true,resumes=0;
+ globalThis.fetch=async(url,options={})=>{
+  if(String(url)==='https://source.example/file')return new Response(source);
+  if(String(url)==='https://output.example/file')return new Response(null,{status:200});
+  const body=JSON.parse(options.body);if(body.action==='put'&&fail)throw Error('R2 unavailable');
+  return Response.json({url:body.action==='get'?'https://source.example/file':'https://output.example/file'});
+ };
+ const muse={beginJob:async()=>({url:'https://muse.ai/thread/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'}),async generateSceneV2(_j,_s,_source,{receipt}){assert.equal(receipt.key,'original-receipt');resumes++;return {path:file}}};
+ const ctx={client,muse,workRoot:root,workerId:randomUUID(),leaseToken:randomUUID(),videoEditEnabled:true};
+ await assert.rejects(processSingleMediaJob(job,ctx),{code:'MUSE_TIMEOUT'});
+ assert.equal(scene.request_receipt.key,'original-receipt');assert.equal(calls.filter(c=>c.name==='complete_single_media_job').length,0);
+ fail=false;await processSingleMediaJob(job,ctx);
+ assert.equal(resumes,2);assert.equal(scene.request_receipt.key,'original-receipt');assert.equal(calls.filter(c=>c.name==='complete_single_media_job').length,1);
 });
 
 test('a valid 75 MiB MP4 passes the new application limit and reaches storage once',async t=>{
