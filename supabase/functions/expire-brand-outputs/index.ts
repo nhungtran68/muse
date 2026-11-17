@@ -50,6 +50,9 @@ Deno.serve(async (request) => {
   const summary = { claimed: jobs.length, expired: 0, partially_cleaned: 0, retry_scheduled: 0, terminal_failures: 0, claim_failures: 0, abandoned_deleted: 0, abandoned_failed: 0 };
 
   for (const job of jobs) {
+    const providerQuery=await supabase.from('brand_jobs').select('storage_provider,reference_storage_provider,reference_images').eq('id',job.job_id).single();
+    const dueJob:RetentionClaim={...job,reference_paths:job.reference_path&&Array.isArray(providerQuery.data?.reference_images)
+      ?providerQuery.data.reference_images.map((item:{path?:string})=>item.path).filter((item:unknown):item is string=>typeof item==='string'):[]};
     const markerResult = await deleteJobOutputs({
       async list(bucket, path, search) {
         const { data, error: listError } = await supabase.storage.from(bucket).list(path, { search, limit: 100 });
@@ -59,10 +62,9 @@ Deno.serve(async (request) => {
         const { error: removeError } = await supabase.storage.from(bucket).remove(paths);
         return { error: removeError };
       },
-    }, job);
-    const providerQuery=await supabase.from('brand_jobs').select('storage_provider,reference_storage_provider').eq('id',job.job_id).single();
+    }, dueJob);
     const r2Result=providerQuery.error?{ok:false,failures:[{bucket:'r2-provider',error:providerQuery.error}]}:
-      await deleteDueR2Outputs(job,providerQuery.data,async input=>{
+      await deleteDueR2Outputs(dueJob,providerQuery.data,async input=>{
         const origin=Deno.env.get('MUSE_MEDIA_GATEWAY_ORIGIN')||'https://muse-brand-studio.vercel.app';
         const url=new URL('/api/media',origin);
         if(url.protocol!=='https:')throw new Error('R2 cleanup gateway must use HTTPS');

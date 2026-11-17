@@ -1,6 +1,6 @@
 export const REFERENCE_SIZE = Object.freeze({width:720,height:1280});
 export const MAX_REFERENCE_BYTES = 10 * 1024 * 1024;
-export const MAX_REFERENCE_IMAGES = 4;
+export const MAX_REFERENCE_IMAGES = 5;
 
 export function containImageRect(sourceWidth,sourceHeight,targetWidth=REFERENCE_SIZE.width,targetHeight=REFERENCE_SIZE.height){
   if(![sourceWidth,sourceHeight,targetWidth,targetHeight].every(value=>Number.isFinite(value)&&value>0))throw Error('Kích thước ảnh không hợp lệ.');
@@ -20,7 +20,7 @@ function decodeImage(file){
 }
 
 export function referenceTileRects(count,width=REFERENCE_SIZE.width,height=REFERENCE_SIZE.height){
-  if(!Number.isInteger(count)||count<1||count>MAX_REFERENCE_IMAGES)throw Error(`Chọn từ 1 đến ${MAX_REFERENCE_IMAGES} ảnh tham chiếu.`);
+  if(!Number.isInteger(count)||count<1||count>4)throw Error('Khung ảnh cũ chỉ hỗ trợ tối đa 4 ảnh.');
   const gap=12,margin=12,innerWidth=width-2*margin,innerHeight=height-2*margin;
   if(count===1)return [{x:margin,y:margin,width:innerWidth,height:innerHeight}];
   const columnWidth=(innerWidth-gap)/2,rowHeight=(innerHeight-gap)/2;
@@ -36,7 +36,7 @@ export function referenceTileRects(count,width=REFERENCE_SIZE.width,height=REFER
 export async function normalizeReferenceImages(files,options={}){
   const selected=Array.from(files||[]);
   if(!selected.length)throw Error('Chưa chọn ảnh tham chiếu.');
-  if(selected.length>MAX_REFERENCE_IMAGES)throw Error(`Chọn tối đa ${MAX_REFERENCE_IMAGES} ảnh tham chiếu.`);
+  if(selected.length>4)throw Error('Khung ảnh cũ chỉ hỗ trợ tối đa 4 ảnh.');
   if(selected.length===1)return normalizeReferenceImage(selected[0],options);
   for(const file of selected){
     if(!['image/jpeg','image/png','image/webp'].includes(file.type))throw Error('Chỉ hỗ trợ ảnh JPG, PNG hoặc WebP.');
@@ -61,6 +61,17 @@ export async function normalizeReferenceImages(files,options={}){
   const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',0.94));
   if(!blob?.size||blob.size>MAX_REFERENCE_BYTES)throw Error('Không tạo được khung ảnh tham chiếu dưới 10 MB. Hãy chọn ảnh có độ phân giải thấp hơn.');
   return {file:new File([blob],'reference-composite-9x16.jpg',{type:'image/jpeg'}),width,height,padded:true,collage:true,count:selected.length};
+}
+
+// Keep the original one-photo normalization for each attachment. The collage
+// function above remains only to resume requests created by the older web UI.
+export async function prepareIndependentReferences(files,options={}){
+  const selected=Array.from(files||[]);
+  if(!selected.length)throw Error('Chưa chọn ảnh tham chiếu.');
+  if(selected.length>MAX_REFERENCE_IMAGES)throw Error(`Chọn tối đa ${MAX_REFERENCE_IMAGES} ảnh tham chiếu.`);
+  const prepared=[];
+  for(const file of selected)prepared.push(await normalizeReferenceImage(file,options));
+  return prepared;
 }
 
 export async function normalizeReferenceImage(file,{preserveAspect=false}={}){

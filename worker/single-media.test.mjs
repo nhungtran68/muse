@@ -32,6 +32,21 @@ for(const mode of ['video_free','image'])test(`${mode} stores one real output, w
  assert.equal(objects.get(result).options.contentType,kind==='image'?'image/png':'video/mp4');assert.deepEqual(objects.get(result).data,await readFile(file));
  const prompt=buildFlexibleMediaPrompt(job,job.plan[0],'KEY');assert.ok(prompt.includes(job.plan[0].prompt));assert.ok(!prompt.includes('dài 10 giây'));
 });
+test('one image-generation request passes five separate verified attachments to Muse',async t=>{
+ const root=await mkdtemp(path.join(tmpdir(),'muse-media-five-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const output=await mediaFile(root,'image'),source=await readFile(output),{job,client}=fixture('image');
+ const hash=createHash('sha256').update(source).digest('hex');
+ job.reference_path=`${job.user_id}/${job.id}/reference`;job.reference_sha256=hash;job.reference_storage_provider='supabase';
+ job.reference_images=Array.from({length:5},(_,index)=>({path:`${job.user_id}/${job.id}/reference${index?`-${index+1}`:''}`,sha256:hash}));
+ const uploadStorage=client.storage.from;client.storage.from=bucket=>bucket==='brand-references'?{download:async()=>({data:new Blob([source]),error:null})}:uploadStorage(bucket);
+ let sends=0;const muse={beginJob:async()=>({url:'https://muse.ai/thread/'+randomUUID()}),async generateSceneV2(_job,_scene,images){
+  sends++;assert.equal(images.length,5);
+  for(const [index,image] of images.entries()){assert.match(image,new RegExp(`reference-${index+1}\\.png$`));assert.deepEqual(await readFile(image),source);}
+  return {path:output};
+ }};
+ await processSingleMediaJob(job,{client,muse,workRoot:root,workerId:randomUUID(),leaseToken:randomUUID()});
+ assert.equal(sends,1);
+});
 test('a timed-out free request retains its receipt and never completes or uploads a result',async t=>{
  const root=await mkdtemp(path.join(tmpdir(),'muse-media-timeout-'));t.after(()=>rm(root,{recursive:true,force:true}));const {job,client,calls,objects,scene}=fixture('video_free');
  scene.request_receipt={key:'original-request'};

@@ -13,3 +13,8 @@ test('a failed R2 deletion is reported for retry without blocking another due bu
 test('legacy Supabase-only jobs never call R2 deletion',async()=>{
  const result=await deleteDueR2Outputs(job,{storage_provider:'supabase',reference_storage_provider:'supabase'},async()=>assert.fail());assert.equal(result.ok,true);
 });
+test('R2 cleanup includes all separate reference files',async()=>{
+ const paths=[job.reference_path,'owner/job/reference-2','owner/job/reference-3'];
+ const calls=[];await deleteDueR2Outputs({...job,reference_paths:paths},{storage_provider:'supabase',reference_storage_provider:'r2'},async value=>calls.push(value));
+ assert.deepEqual(calls,[{jobId:'job',claim:'claim',bucket:'brand-references',paths}]);
+});

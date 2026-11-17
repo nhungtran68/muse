@@ -4,6 +4,7 @@ import path from 'node:path';
 import {probeVideo,joinScenes} from './ffmpeg.mjs';
 import {assertGeneratedMediaSize} from '../shared/media-limits.mjs';
 import {downloadMedia,uploadMedia} from '../shared/media-storage.mjs';
+import {downloadImageReferences} from './reference-images.mjs';
 
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 // Initial edit uploads are deliberately smaller than generated outputs: the
@@ -41,6 +42,8 @@ export async function processSingleMediaJob(job,{client,muse,workRoot,workerId,l
   let image=null;
   try{
   if(job.reference_path){
+    if(!isVideoEdit)image=await downloadImageReferences(job,{client,dir});
+    else{
     let result;
     try{result=await downloadMedia(client,{provider:job.reference_storage_provider,bucket:'brand-references',path:job.reference_path,jobId:job.id,origin:process.env.MUSE_MEDIA_GATEWAY_ORIGIN})}
     catch(error){if(isVideoEdit)throw Object.assign(Error('Chưa tải được video nguồn từ kho; sẽ thử lại an toàn.'),{code:'VIDEO_SOURCE_DOWNLOAD_FAILED',retryable:true});throw error;}
@@ -52,6 +55,7 @@ export async function processSingleMediaJob(job,{client,muse,workRoot,workerId,l
     if(isVideoEdit){
       try{validateVideoSource(bytes,await probeVideo(image));}
       catch(error){throw Object.assign(Error(error.code?error.message:'Không giải mã được video đầu vào. Hãy xuất lại video MP4 và thử lại.'),{code:error.code||'VIDEO_INPUT_INVALID',retryable:false});}
+    }
     }
   }
   const conversation=await muse.beginJob(job);

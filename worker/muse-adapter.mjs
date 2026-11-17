@@ -148,6 +148,33 @@ export class MuseAdapter {
   }
   async attachReference(imagePath){
     const p=this.requirePage();
+    const images=Array.isArray(imagePath)?imagePath:[imagePath];
+    if(images.length>1){
+      if(images.length>5||images.some(file=>typeof file!=='string'))throw Object.assign(Error('Danh sách ảnh tham chiếu không hợp lệ.'),{code:'MUSE_IMAGE_UPLOAD_UNAVAILABLE',retryable:false});
+      const composer=p.locator('[data-hatch-composer-chrome]');
+      if(await composer.count()!==1)throw Object.assign(Error('Không xác định được vùng đính kèm ảnh trên Muse.'),{code:'MUSE_IMAGE_UPLOAD_UNAVAILABLE',retryable:false});
+      const inputs=composer.locator('input[type="file"]');let batch=null;
+      for(let index=0;index<await inputs.count();index++){
+        const item=inputs.nth(index),accept=(await item.getAttribute('accept')||'').toLowerCase();
+        if((!accept||accept.includes('image')||accept.includes('.png')||accept.includes('.jpg'))&&await item.getAttribute('multiple')!==null){batch=item;break;}
+      }
+      if(batch){await batch.setInputFiles(images);}
+      else{
+        for(const file of images){
+          await this.attachReference(file);
+          const name=path.basename(file);
+          try{await composer.getByRole('img',{name,exact:true}).waitFor({state:'visible',timeout:60000});}
+          catch{throw Object.assign(Error(`Muse chưa xác nhận ảnh ${name}; yêu cầu chưa được gửi.`),{code:'MUSE_IMAGE_UPLOAD_UNCONFIRMED',retryable:true});}
+        }
+      }
+      for(const file of images){
+        const name=path.basename(file);
+        try{await composer.getByRole('img',{name,exact:true}).waitFor({state:'visible',timeout:60000});}
+        catch{throw Object.assign(Error(`Muse chưa xác nhận đủ ${images.length} ảnh độc lập; yêu cầu chưa được gửi.`),{code:'MUSE_IMAGE_UPLOAD_UNCONFIRMED',retryable:true});}
+      }
+      return;
+    }
+    imagePath=images[0];
     const inputs=p.locator('input[type="file"]');
     const count=await inputs.count();
     for(let i=0;i<count;i++){
