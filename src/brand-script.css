@@ -42,6 +42,9 @@
 .attach-icon{display:grid;place-items:center;width:22px;height:22px;border-radius:7px;background:#EEF2FF;color:var(--brand-blue);font-size:19px;line-height:1}
 .composer-attachments>small:not(.image-processing-status){color:var(--muted);font-size:11px}
 .composer-attachments img{max-width:min(180px,100%);max-height:140px;object-fit:contain;border-radius:10px;border:1px solid var(--line);background:#F8FAFF}
+.reference-file-list{display:flex;flex-basis:100%;flex-wrap:wrap;gap:5px;min-width:0}
+.reference-file-list[hidden]{display:none}
+.reference-file-list span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px 7px;border-radius:7px;background:#F0F3FA;color:var(--ink-soft);font-size:11px}
 .image-processing-status{flex-basis:100%;font-size:12px;color:var(--ink-soft)}
 .image-processing-status[data-state=ready]{color:var(--success)}
 .image-processing-status[data-state=error]{color:var(--danger);font-weight:700}

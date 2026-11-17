@@ -2,7 +2,7 @@ import {createClient} from '@supabase/supabase-js';
 import {adminEmail, supabaseKey, supabaseUrl} from './config.js';
 import {validateEditedDialogue} from '../shared/brand-video-prompt.mjs';
 import {CREATION_MODES,getCreationMode,isSingleMediaScene} from '../shared/creation-modes.mjs';
-import {normalizeReferenceImage} from './image-normalization.mjs';
+import {normalizeReferenceImages} from './image-normalization.mjs';
 import {hasUncertainSubmission, visibleSceneStatus} from './job-recovery.mjs';
 import {uploadMedia,downloadMedia,signedMediaUrl} from '../shared/media-storage.mjs';
 import './styles.css';
@@ -80,7 +80,7 @@ function renderModule() {
   section.innerHTML=`<div class="composer-card"><form id="create-form" class="single-composer">
     <div class="composer-mode"><label for="creation-mode">Chế độ tạo</label><div class="mode-select-wrap"><select id="creation-mode" aria-describedby="mode-description">${CREATION_MODES.map(mode=>`<option value="${mode.id}">${mode.label}</option>`).join('')}</select><span aria-hidden="true">⌄</span></div></div>
     <label class="sr-only" for="content">Mô tả nội dung muốn tạo</label><textarea id="content" rows="5" minlength="10" maxlength="4000" required></textarea>
-    <div class="composer-attachments"><input id="reference" type="file" accept="image/png,image/jpeg,image/webp"><label class="attach-control" for="reference"><span class="attach-icon" aria-hidden="true">＋</span><span id="file-name">Thêm ảnh tham chiếu</span></label><button id="remove-reference" class="text-button remove-reference" type="button" hidden>Xóa ảnh</button><small id="reference-hint">JPG, PNG hoặc WebP · tối đa 10 MB</small><img id="image-preview" alt="Ảnh tham chiếu đã chọn" hidden><span class="image-processing-status" id="image-processing-status" role="status" aria-live="polite"></span></div>
+    <div class="composer-attachments"><input id="reference" type="file" accept="image/png,image/jpeg,image/webp" multiple><label class="attach-control" for="reference"><span class="attach-icon" aria-hidden="true">＋</span><span id="file-name">Thêm ảnh tham chiếu</span></label><button id="remove-reference" class="text-button remove-reference" type="button" hidden>Xóa ảnh</button><small id="reference-hint">JPG, PNG hoặc WebP · tối đa 4 ảnh, 10 MB/ảnh</small><span id="reference-file-list" class="reference-file-list" hidden></span><img id="image-preview" alt="Khung ảnh tham chiếu sẽ gửi" hidden><span class="image-processing-status" id="image-processing-status" role="status" aria-live="polite"></span></div>
     <div class="composer-bottom"><span class="mode-note" id="mode-description" aria-live="polite"></span><button class="primary create-button" type="submit">Gửi <span aria-hidden="true">↑</span></button></div>
     <p class="consent"><span aria-hidden="true">ⓘ</span> Yêu cầu và ảnh đính kèm được xử lý qua hệ thống của đơn vị vận hành. Mỗi lần gửi nhận một kết quả.</p>${settings.enabled?'':'<p class="inline-warning">Quản trị viên đang tạm dừng nhận yêu cầu.</p>'}</form></div><p class="composer-footnote" id="composer-footnote"></p>`;
   const form=section.querySelector('#create-form'),modeInput=section.querySelector('#creation-mode');
@@ -91,18 +91,20 @@ function renderModule() {
   const syncCreateButton=()=>{const mode=getCreationMode(modeInput.value);createButton.disabled=form.dataset.busy==='true'||!settings.enabled||(mode.id==='video_10s'&&!modes.some(item=>item.seconds===10))||(mode.referenceRequired&&!preparedReference)||(Boolean(referenceInput.files[0])&&!preparedReference);};
   const prepareImage=async()=>{
     const mode=getCreationMode(modeInput.value);
-    const sequence=++referenceNormalizationSequence,file=referenceInput.files[0],image=section.querySelector('#image-preview');
+    const sequence=++referenceNormalizationSequence,files=Array.from(referenceInput.files),file=files[0],image=section.querySelector('#image-preview');
+    const fileList=section.querySelector('#reference-file-list');fileList.replaceChildren();fileList.hidden=!files.length;
+    for(const selected of files){const item=document.createElement('span');item.textContent=selected.name;fileList.append(item);}
     preparedReference=null;syncCreateButton();
     section.querySelector('#remove-reference').hidden=!file;
     if(previewUrl){URL.revokeObjectURL(previewUrl);previewUrl=null;}
     if(!file){image.hidden=true;image.removeAttribute('src');section.querySelector('#file-name').textContent='Thêm ảnh tham chiếu';imageStatus.textContent='';imageStatus.dataset.state='';return;}
-    image.hidden=true;image.removeAttribute('src');section.querySelector('#file-name').textContent=file.name;imageStatus.textContent=mode.id==='video_10s'?'Đang chuẩn hóa ảnh theo khung dọc 9:16…':'Đang kiểm tra ảnh tham chiếu…';imageStatus.dataset.state='working';
+    image.hidden=true;image.removeAttribute('src');section.querySelector('#file-name').textContent=files.length>1?`${files.length} ảnh đã chọn`:file.name;imageStatus.textContent=files.length>1?'Đang sắp xếp ảnh vào một khung tham chiếu…':mode.id==='video_10s'?'Đang chuẩn hóa ảnh theo khung dọc 9:16…':'Đang kiểm tra ảnh tham chiếu…';imageStatus.dataset.state='working';
     try{
-      const result=await normalizeReferenceImage(file,{preserveAspect:mode.id!=='video_10s'});
+      const result=await normalizeReferenceImages(files,{preserveAspect:mode.id!=='video_10s'});
       if(sequence!==referenceNormalizationSequence)return;
       preparedReference=result.file;previewUrl=URL.createObjectURL(result.file);image.src=previewUrl;image.hidden=false;
-      section.querySelector('#file-name').textContent=result.preserved?file.name:`${file.name} · đã chuẩn hóa 9:16`;
-      imageStatus.textContent=result.preserved?`Ảnh ${result.width} × ${result.height} · giữ nguyên tỷ lệ gốc.`:result.padded?`Đã xử lý thành ảnh 720 × 1280. Giữ nguyên tỷ lệ, thêm phần đệm để không cắt mất nội dung.`:`Đã xử lý thành ảnh 720 × 1280 (9:16), không kéo méo ảnh.`;
+      section.querySelector('#file-name').textContent=result.collage?`${files.length} ảnh tham chiếu`:result.preserved?file.name:`${file.name} · đã chuẩn hóa 9:16`;
+      imageStatus.textContent=result.collage?`Đã ghép ${files.length} ảnh vào một khung 9:16 để gửi cùng một yêu cầu. Giữ nguyên tỷ lệ từng ảnh, không sửa ảnh gốc.`:result.preserved?`Ảnh ${result.width} × ${result.height} · giữ nguyên tỷ lệ gốc.`:result.padded?`Đã xử lý thành ảnh 720 × 1280. Giữ nguyên tỷ lệ, thêm phần đệm để không cắt mất nội dung.`:`Đã xử lý thành ảnh 720 × 1280 (9:16), không kéo méo ảnh.`;
       imageStatus.dataset.state='ready';
     }catch(error){
       if(sequence!==referenceNormalizationSequence)return;
@@ -115,8 +117,8 @@ function renderModule() {
     const mode=getCreationMode(modeInput.value);referenceInput.required=mode.referenceRequired;
     section.querySelector('#content').placeholder=mode.placeholder;
     section.querySelector('#mode-description').textContent=mode.id==='video_10s'&&!modes.some(item=>item.seconds===10)?'Chế độ 10 giây đang tạm tắt':mode.hint;
-    section.querySelector('#reference-hint').textContent=`${mode.referenceRequired?'Cần một ảnh':'Ảnh không bắt buộc'} · JPG, PNG, WebP · tối đa 10 MB`;
-    section.querySelector('#composer-footnote').textContent=mode.id==='image'?'Thêm ảnh tham chiếu nếu cần giữ chủ thể hoặc phong cách. Kết quả là một ảnh để xem và tải xuống.':mode.id==='video_free'?'Nhập độ dài và khung hình mong muốn trong mô tả. Hệ thống tự xử lý và ghép thành một video hoàn chỉnh.':'Thêm một ảnh tham chiếu. Kết quả là một video dọc 10 giây theo mô tả của bạn.';
+    section.querySelector('#reference-hint').textContent=`${mode.referenceRequired?'Cần ít nhất 1 ảnh':'Ảnh không bắt buộc'} · JPG, PNG, WebP · tối đa 4 ảnh, 10 MB/ảnh`;
+    section.querySelector('#composer-footnote').textContent=mode.id==='image'?'Thêm ảnh tham chiếu nếu cần giữ chủ thể hoặc phong cách. Kết quả là một ảnh để xem và tải xuống.':mode.id==='video_free'?'Nhập độ dài và khung hình mong muốn trong mô tả. Hệ thống tự xử lý và ghép thành một video hoàn chỉnh.':'Thêm ảnh tham chiếu. Kết quả là một video dọc 10 giây theo mô tả của bạn.';
     syncCreateButton();
   };
   referenceInput.addEventListener('change',prepareImage);
@@ -174,6 +176,7 @@ async function submitBrand(event) {
     form.querySelector('#creation-mode').value=mode.id;
     preparedReference=null;referenceNormalizationSequence++;if(previewUrl){URL.revokeObjectURL(previewUrl);previewUrl=null;}
     document.querySelector('#image-preview').hidden=true;document.querySelector('#image-preview').removeAttribute('src');document.querySelector('#file-name').textContent='Thêm ảnh tham chiếu';
+    const fileList=document.querySelector('#reference-file-list');fileList?.replaceChildren();if(fileList)fileList.hidden=true;
     const imageStatus=document.querySelector('#image-processing-status');if(imageStatus){imageStatus.textContent='';imageStatus.dataset.state='';}
     form.querySelector('#remove-reference').hidden=true;
     await refreshJobs();document.querySelector('#jobs').scrollIntoView({behavior:'smooth'});
@@ -411,7 +414,7 @@ async function refreshJobs({force=false}={}) {
     const finalActions=canDownloadFinal(job)?`<button class="outline view-video" data-kind="${isImage?'image':'video'}" data-path="${safe(job.final_path)}" data-id="${safe(job.id)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(job.output_expires_at||'')}">Xem ${mediaName}</button><a class="primary download-final download-file" role="button" tabindex="0" aria-disabled="true" data-path="${safe(job.final_path)}" data-id="${safe(job.id)}" data-retention="${safe(job.retention_status||'legacy')}" data-expiry="${safe(job.output_expires_at||'')}">Đang chuẩn bị…</a>`:'';
     const safeResume=hasUncertainSubmission(job);
     const statusLabel=singleVideo&&job.status==='generating'?(firstScene?.submission_state==='sent'?`Đang tạo ${mediaName}`:'Đang gửi yêu cầu'):singleVideo&&job.status==='planning'?'Đang gửi yêu cầu':singleVideo&&job.status==='joining'?'Đang lưu kết quả':status[job.status]||job.status;
-    const otherAction=job.status==='uploading'?(job.reference_kind==='video'?'<small>Hãy gửi lại video nguồn trong ChatGPT để tiếp tục yêu cầu này.</small>':`<label class="outline">Chọn lại ảnh<input class="resume-file" type="file" accept="image/png,image/jpeg,image/webp" data-id="${safe(job.id)}"></label>`):job.status==='error'&&job.error_code==='MEDIA_TOO_LARGE'&&job.output_r2_selected!==false?`<button class="outline resume-oversize-job" type="button" data-id="${safe(job.id)}">Nhận lại kết quả</button>`:safeResume?`<button class="outline resume-uncertain-job" type="button" data-id="${safe(job.id)}">Tiếp tục kiểm tra</button>`:singleVideo&&job.status==='error'&&job.retryable?`<button class="outline retry-single-job" type="button" data-id="${safe(job.id)}">Gửi lại ${mediaName}</button>`:job.status==='error'&&job.retryable?`<button class="outline retry-job" type="button" data-id="${safe(job.id)}">${job.workflow_phase==='script'?'Tạo lại kịch bản':'Tạo lại video'}</button>`:'';
+    const otherAction=job.status==='uploading'?(job.reference_kind==='video'?'<small>Hãy gửi lại video nguồn trong ChatGPT để tiếp tục yêu cầu này.</small>':`<label class="outline">Chọn lại ảnh<input class="resume-file" type="file" accept="image/png,image/jpeg,image/webp" multiple data-id="${safe(job.id)}"></label>`):job.status==='error'&&job.error_code==='MEDIA_TOO_LARGE'&&job.output_r2_selected!==false?`<button class="outline resume-oversize-job" type="button" data-id="${safe(job.id)}">Nhận lại kết quả</button>`:safeResume?`<button class="outline resume-uncertain-job" type="button" data-id="${safe(job.id)}">Tiếp tục kiểm tra</button>`:singleVideo&&job.status==='error'&&job.retryable?`<button class="outline retry-single-job" type="button" data-id="${safe(job.id)}">Gửi lại ${mediaName}</button>`:job.status==='error'&&job.retryable?`<button class="outline retry-job" type="button" data-id="${safe(job.id)}">${job.workflow_phase==='script'?'Tạo lại kịch bản':'Tạo lại video'}</button>`:'';
     const durationLabel=isImage?'1 ảnh · Tạo ảnh':job.creation_mode==='video_free'?`1 video · Video tự do${job.final_probe?.duration?` · ${Number(job.final_probe.duration).toFixed(1).replace(/\.0$/,'')} giây`:''}`:singleVideo?`1 video · ${job.scene_seconds} giây`:job.schema_version===3?`${job.scene_count} đoạn · ${job.scene_seconds} giây/đoạn · tổng ${job.scene_count*job.scene_seconds} giây`:`${job.scene_count} cảnh · ${job.scene_seconds} giây/cảnh · tổng ${job.scene_count*job.scene_seconds} giây`;
     const track=scriptNeedsRetry?'':singleVideo?'':`<div class="scene-track">${Array.from({length:job.scene_count},(_,i)=>{const scene=job.brand_scenes?.find(x=>x.scene_index===i+1);return `<span class="scene-pill ${safe(scene?.status||'waiting')}">${String(i+1).padStart(2,'0')}</span>`;}).join('')}</div>`;
     const scriptDetails=singleVideo?'':job.brand_scenes?.length?`<details><summary>Lời thoại từng đoạn</summary>${job.brand_scenes.sort((a,b)=>a.scene_index-b.scene_index).map(scene=>`<p><strong>Đoạn ${scene.scene_index} · ${scene.planned_seconds||job.scene_seconds} giây</strong><br>Lời thoại: ${safe(scene.dialogue||'Không có')}</p>`).join('')}</details>`:'';
@@ -480,7 +483,7 @@ async function refreshJobs({force=false}={}) {
     if(!file||!job||input.disabled||session?.user.id!==userId)return;
     input.disabled=true;
     try{
-      if(await fileHash(file)!==job.reference_sha256&&job.creation_mode==='video_10s')file=(await normalizeReferenceImage(file)).file;
+      if(await fileHash(file)!==job.reference_sha256)file=(await normalizeReferenceImages(input.files,{preserveAspect:job.creation_mode!=='video_10s'})).file;
       if(await fileHash(file)!==job.reference_sha256)throw Error('Ảnh không khớp ảnh đã chọn ban đầu. Hãy chọn lại ảnh gốc trên thiết bị đã gửi yêu cầu.');
       if(session?.user.id!==userId||!input.isConnected)return;
       const token=session.access_token,actor=createClient(supabaseUrl,supabaseKey,{global:{headers:{Authorization:'Bearer '+token}},auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
