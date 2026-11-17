@@ -29,10 +29,14 @@ export function summarizeMuseReply(text){
 
 export function museVideoRejection(text){
   const sentences=String(text||'').split(/(?<=[.!?])\s+|\n+/u);
-  return sentences.some(sentence=>{
+  return sentences.some(original=>{
     // A quoted instruction such as "If unsupported, report an error" is not
     // itself a refusal. Only inspect statements from this request's reply.
-    if(/^\s*(?:nếu|if)(?:\s|[:,])/iu.test(sentence))return false;
+    if(/^\s*>/u.test(original))return false;
+    const sentence=original.replace(/"[^"\n]*"|“[^”\n]*”/gu,'').trim();
+    if(/(?:^|[\s:;,(])(?:nếu|if)(?:\s|[:,])/iu.test(sentence))return false;
+    const missingReference=/(?:không|chưa)\s+(?:thể\s+)?(?:truy cập|đọc|mở|tải|nhận|tìm)(?:\s+(?:được|đúng|cả|các|đủ|tệp|file|[1-9]\d*))*\s+(?:hình\s+)?ảnh\s+(?:tham chiếu|đính kèm)|(?:không|chưa)\s+có\s+(?:bất kỳ\s+|tệp\s+|file\s+)?(?:hình\s+)?ảnh\s+(?:tham chiếu|đính kèm)|(?:cannot|can't|unable to)\s+(?:access|read|open|download|find)\s+(?:the\s+)?(?:attached|reference)\s+(?:image|photo|file)|\/mnt\/data(?:\/|\b)[^!?\n]{0,250}(?:không tồn tại|không có trên máy|không mở được)/iu.test(sentence);
+    if(missingReference)return true;
     return /(?:(?:không|chưa)\s+thể\s+(?:tạo|xuất|render|giao|trả|cung cấp)(?:\s+được)?\s+(?:file\s+)?(?:video|clip|mp4)|không\s+(?:tạo|xuất|render|giao|trả|gửi)\s+được\s+(?:file\s+)?(?:video|clip|mp4)|không\s+(?:giao|trả|gửi)\s+(?:file\s+)?(?:video|clip|mp4)|(?:không|chưa)\s+(?:thể\s+)?(?:đọc|xử lý|chỉnh sửa)(?:\s+được)?\s+(?:(?:tệp|file)\s+)?(?:video|mp4)|(?:không|chưa)(?:\s+được)?\s+hỗ trợ|not supported|(?:cannot|can't|unable to)\s+(?:create|generate|render|deliver|provide|read|edit)(?:\s+\w+){0,3}\s+(?:video|clip|mp4))/iu.test(sentence);
   });
 }

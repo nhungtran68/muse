@@ -27,10 +27,12 @@ test('recognizes explicit Vietnamese refusals without requiring the words báo l
     'Tôi không tạo được video.',
     'Mình không thể đọc tệp video đính kèm.',
     'Mình không chỉnh sửa được video này.',
+    'Mình không thể truy cập ảnh tham chiếu.',
+    'Đường dẫn /mnt/data/portrait.png không tồn tại.',
     'Báo lỗi cho đoạn 1/3 GEN_0, mình không giao clip này: bản tạo ra đúng 10,0 giây và có track AAC, nhưng khung hình là 960x960 vuông, không phải dọc 9:16 như yêu cầu. Theo đúng chỉ dẫn của bạn, mình đã không tự cắt hay kéo giãn về 720x1280. Bạn có muốn mình thử lại một lần với mã mới không?',
     'I am unable to generate a video for this request.'
   ])assert.equal(museVideoRejection(reply),true,reply);
-  for(const reply of ['Video đang được tạo, vui lòng chờ.','Nếu không hỗ trợ thời lượng, hãy báo lỗi.','If not supported, report an error.'])assert.equal(museVideoRejection(reply),false,reply);
+  for(const reply of ['Video đang được tạo, vui lòng chờ.','Nếu không hỗ trợ thời lượng, hãy báo lỗi.','If not supported, report an error.','Nội dung yêu cầu: “không thể truy cập ảnh tham chiếu”.','Bạn kiểm tra nếu không thể truy cập ảnh tham chiếu.'])assert.equal(museVideoRejection(reply),false,reply);
   assert.equal(summarizeMuseReply('Trả tại https://example.com/private?token=secret\n'+ 'A'.repeat(50)), 'Trả tại [liên kết] [mã]');
 });
 function draftFixture({navigate = url => url, bubbles = () => 0} = {}) {
