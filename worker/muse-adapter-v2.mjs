@@ -51,11 +51,15 @@ export class MuseAdapterV2 extends MuseAdapter {
 
   async sceneResponse(requestKey,{kind='video',finalOnly=false}={}) {
     const page = this.requirePage();
-    const elements = await page.getByRole('button', {
-      name: kind==='image'?/^(Mở|Xem) (?:hình )?ảnh\b|^(Open|View) (?:generated )?(?:image|photo|picture)\b/i:/^(Mở|Xem) video\b|^(Open|View|Play) (?:animated )?video\b/i
+    const videoElements=kind==='image'?[]:await page.getByRole('button', {
+      name:/^(Mở|Xem) video\b|^(Open|View|Play) (?:animated )?video\b/i
     }).elementHandles();
-    if(kind==='image')elements.push(...await page.locator('.hatch-chat-groupable-bubble:not(.bg-chat-user-bubble) img').elementHandles());
-    const state = await page.evaluateHandle(({elements, key, kind, finalOnly}) => {
+    const imageElements=kind==='video'?[]:await page.getByRole('button', {
+      name:/^(Mở|Xem) (?:hình )?ảnh\b|^(Open|View) (?:generated )?(?:image|photo|picture)\b/i
+    }).elementHandles();
+    if(kind!=='video')imageElements.push(...await page.locator('.hatch-chat-groupable-bubble:not(.bg-chat-user-bubble) img').elementHandles());
+    const elements=[...videoElements,...imageElements];
+    const state = await page.evaluateHandle(({elements, key, kind, finalOnly, videoCount}) => {
       const users = [...document.querySelectorAll('.hatch-chat-groupable-bubble.bg-chat-user-bubble')];
       const matches = users.filter(element => element.textContent.includes(key + '.'));
       const anchor = matches.length === 1 ? matches[0] : null;
@@ -67,24 +71,28 @@ export class MuseAdapterV2 extends MuseAdapter {
       // A free video may expose intermediate clips before Muse finishes joining.
       // Use the final output in this request's reply, after the task has stopped.
       candidates.sort((a,b)=>a===b?0:follows(a,b)?-1:1);
-      const video=finalOnly?candidates.at(-1):candidates[0];
+      const videoCandidates=candidates.filter(element=>elements.indexOf(element)<videoCount);
+      const chosen=kind==='auto'&&videoCandidates.length?videoCandidates:candidates;
+      const video=finalOnly?chosen.at(-1):chosen[0];
+      const mediaKind=video?(elements.indexOf(video)<videoCount?'video':'image'):null;
       const replies = [...document.querySelectorAll('.hatch-chat-groupable-bubble:not(.bg-chat-user-bubble)')].filter(inReply);
       const text = replies.map(element => element.textContent).join('\n');
       const identity=video?(video.getAttribute('src')||video.querySelector('img,video')?.getAttribute('src')||video.getAttribute('aria-label')||'media')+'|'+candidates.length:null;
-      return {requested: Boolean(anchor), video: video || null, text, identity};
-    }, {elements, key: requestKey,kind,finalOnly});
+      return {requested: Boolean(anchor), video: video || null, mediaKind, text, identity};
+    }, {elements, key: requestKey,kind,finalOnly,videoCount:videoElements.length});
     await Promise.all(elements.map(element => element.dispose()));
     const requestedHandle = await state.getProperty('requested');
     const textHandle = await state.getProperty('text');
     const requested = await requestedHandle.jsonValue(), responseText = await textHandle.jsonValue();
     await requestedHandle.dispose(); await textHandle.dispose();
     const identityHandle=await state.getProperty('identity'),mediaIdentity=await identityHandle.jsonValue();await identityHandle.dispose();
+    const kindHandle=await state.getProperty('mediaKind'),mediaKind=await kindHandle.jsonValue();await kindHandle.dispose();
     const handle = await state.getProperty('video'), video = handle.asElement();
     if (!video) await handle.dispose();
     await state.dispose();
     const busy=finalOnly?await page.getByRole('button',{name:/^(Dừng nhiệm vụ|Stop task)$/i}).isVisible().catch(()=>false):false;
-    const imageRejected=kind==='image'&&/(?:(?:không|chưa)\s+thể\s+(?:tạo|xuất|giao)(?:\s+được)?\s+(?:hình\s+)?ảnh|(?:cannot|unable to)\s+(?:create|generate)\s+(?:an?\s+)?image)/iu.test(responseText);
-    return {requested, video,busy,mediaIdentity,rejected:!video&&(imageRejected||museVideoRejection(responseText)),responseText:summarizeMuseReply(responseText)};
+    const imageRejected=kind!=='video'&&/(?:(?:không|chưa)\s+thể\s+(?:tạo|xuất|giao)(?:\s+được)?\s+(?:hình\s+)?ảnh|(?:cannot|unable to)\s+(?:create|generate)\s+(?:an?\s+)?image)/iu.test(responseText);
+    return {requested, video,mediaKind,busy,mediaIdentity,rejected:!video&&(imageRejected||museVideoRejection(responseText)),responseText:summarizeMuseReply(responseText)};
   }
 
   async downloadImage(fileId,element){
@@ -214,7 +222,7 @@ export class MuseAdapterV2 extends MuseAdapter {
 
   async generateSceneV2(job,scene,imagePath,{receipt,onBeforeSend,onSubmitted,onConversation}={}){
     const page=this.requirePage();
-    const flexible=isFlexibleMediaJob(job),kind=job.creation_mode==='image'?'image':'video';
+    const flexible=isFlexibleMediaJob(job),kind=job.creation_mode==='auto'?'auto':job.creation_mode==='image'?'image':'video';
     const readResponse=()=>this.sceneResponse(key,flexible?{kind,finalOnly:true}:{});
     let durableReceipt=Boolean(receipt);
     const key=`BRAND_${job.id.replaceAll('-','_')}_SCENE_${scene.index}_GEN_${scene.generation||0}`;
@@ -280,13 +288,13 @@ export class MuseAdapterV2 extends MuseAdapter {
         const identity=response.mediaIdentity||'media';
         if(response.busy||stableIdentity!==identity){stableIdentity=response.busy?null:identity;stableSince=Date.now();}
         const ready=!flexible||(!response.busy&&Date.now()-stableSince>=(this.mediaSettleMs??6000));
-        try{if(ready){if(kind==='image')return await this.downloadImage(`${job.id}-${scene.index}`,response.video);await response.video.click();return await this.downloadScene(`${job.id}-${scene.index}`);}}
+        try{if(ready){if((response.mediaKind||kind)==='image'){const result=await this.downloadImage(`${job.id}-${scene.index}`,response.video);return kind==='auto'?{...result,kind:'image'}:result;}await response.video.click();const result=await this.downloadScene(`${job.id}-${scene.index}`);return kind==='auto'?{...result,kind:'video'}:result;}}
         finally{await response.video.dispose();}
       }else{stableIdentity=null;stableSince=0;}
-      if(response.rejected&&!response.busy)throw Object.assign(Error(`Muse chưa giao ${kind==='image'?'ảnh':'video'}: ${response.responseText||'Dịch vụ từ chối thông số đã chọn.'}`),{code:'MUSE_OUTPUT_REJECTED',retryable:false});
+      if(response.rejected&&!response.busy)throw Object.assign(Error(`Muse chưa giao ${kind==='auto'?'kết quả':kind==='image'?'ảnh':'video'}: ${response.responseText||'Dịch vụ từ chối yêu cầu.'}`),{code:'MUSE_OUTPUT_REJECTED',retryable:false});
       const remaining=until-Date.now();if(remaining<=0)break;
       await sleep(Math.min(this.pollMs,remaining));response=await readResponse();
     }
-    throw Object.assign(Error(`Chưa nhận được video cảnh ${scene.index}; có thể thử lấy tiếp kết quả đã gửi, không tạo trùng.${response.responseText?' Muse trả lời: '+response.responseText:''}`),{code:'MUSE_TIMEOUT',retryable:true});
+    throw Object.assign(Error(`Chưa nhận được kết quả của yêu cầu ${scene.index}; có thể thử lấy tiếp kết quả đã gửi, không tạo trùng.${response.responseText?' Muse trả lời: '+response.responseText:''}`),{code:'MUSE_TIMEOUT',retryable:true});
   }
 }

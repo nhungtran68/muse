@@ -7,10 +7,10 @@ export function mountVideoOptions(form, mode, client, isAdmin) {
   const options = document.createElement('fieldset');
   options.hidden = true;
   options.className = 'video-delivery-options';
-  options.innerHTML = `<legend>Phân phối video</legend>
-    <label hidden><input type="checkbox" name="output-r2"> Lưu video vào Cloudflare R2</label>
+  options.innerHTML = `<legend>Nơi lưu kết quả</legend>
+    <label hidden><input type="checkbox" name="output-r2"> Lưu kết quả vào Cloudflare R2</label>
     <label hidden><input type="checkbox" name="output-zalo"> <span>Gửi video vào nhóm Zalo</span></label>
-    <small hidden>Khi bỏ chọn R2, video dùng kho mặc định, giới hạn 50 MB.</small>`;
+    <small hidden>Khi bỏ chọn R2, kết quả dùng kho mặc định, giới hạn 50 MB. Zalo chỉ nhận kết quả video.</small>`;
   form.querySelector('.composer-bottom').before(options);
   const r2 = options.querySelector('[name=output-r2]');
   const zalo = options.querySelector('[name=output-zalo]');

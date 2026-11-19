@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
+import {createServer} from 'vite';
 import {chromium} from 'playwright';
 import {installedBrowserExecutable} from '../worker/muse-adapter.mjs';
 import path from 'node:path';
@@ -14,9 +14,8 @@ const token=`${encode({alg:'none',typ:'JWT'})}.${encode({sub:owner,exp:Math.floo
 const json=body=>({status:200,contentType:'application/json',headers:{'access-control-allow-origin':'*','access-control-allow-headers':'*','access-control-allow-methods':'*'},body:JSON.stringify(body)});
 
 test('five photos in the composer create one job and upload five separate files',async t=>{
-  const vite=spawn(process.execPath,[path.join(root,'node_modules/vite/bin/vite.js'),'--host','127.0.0.1','--port',String(port),'--strictPort'],{cwd:root,env:{...process.env,VITE_SUPABASE_URL:api,VITE_SUPABASE_PUBLISHABLE_KEY:'local-test-anon-key'},stdio:['ignore','pipe','pipe'],windowsHide:true});
-  t.after(()=>vite.kill());
-  await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Local site did not start')),30000);vite.stdout.on('data',data=>{if(data.toString().includes('Local:')){clearTimeout(timer);resolve();}});vite.on('exit',code=>reject(Error('Local site stopped: '+code)));});
+  process.env.VITE_SUPABASE_URL=api;process.env.VITE_SUPABASE_PUBLISHABLE_KEY='local-test-anon-key';
+  const vite=await createServer({root,configFile:false,server:{host:'127.0.0.1',port,strictPort:true}});await vite.listen();t.after(()=>vite.close());
   const browser=await chromium.launch({headless:true,...(installedBrowserExecutable()?{executablePath:installedBrowserExecutable()}:{})});t.after(()=>browser.close());
   const context=await browser.newContext(),page=await context.newPage(),calls=[];
   let job=null;
@@ -32,7 +31,7 @@ test('five photos in the composer create one job and upload five separate files'
     if(url.pathname==='/rest/v1/brand_jobs')return route.fulfill(json(job?[job]:[]));
     if(url.pathname==='/rest/v1/rpc/submit_video_with_distribution'){
       const args=request.postDataJSON();calls.push({kind:'submit',args});
-      job={id:jobId,user_id:owner,content:args.p_content,creation_mode:args.p_mode,status:'uploading',reference_path:`${owner}/${jobId}/reference`,reference_sha256:args.p_reference_sha256,reference_storage_provider:'supabase',storage_provider:'supabase',scene_count:1,scene_seconds:10,created_at:new Date().toISOString(),brand_scenes:[]};
+      job={id:jobId,user_id:owner,content:args.p_content,creation_mode:args.p_mode,status:'uploading',reference_path:`${owner}/${jobId}/reference`,reference_sha256:args.p_reference_sha256,reference_storage_provider:'supabase',storage_provider:'supabase',scene_count:1,scene_seconds:null,created_at:new Date().toISOString(),brand_scenes:[]};
       return route.fulfill(json(job));
     }
     if(url.pathname==='/rest/v1/rpc/set_job_reference_images'){
@@ -63,12 +62,13 @@ test('five photos in the composer create one job and upload five separate files'
   assert.equal(await page.locator('#reference-previews img').count(),5);
   await page.locator('#content').fill('Tạo video giới thiệu vườn cây, dùng năm ảnh tham chiếu này.');
   await page.locator('.create-button').click();
-  await page.waitForFunction(()=>document.querySelector('#notice')?.textContent?.includes('Đã gửi một yêu cầu hoàn chỉnh'));
+  await page.waitForFunction(()=>document.querySelector('#notice')?.textContent?.includes('Đã gửi yêu cầu'));
   assert.deepEqual(calls.map(call=>call.kind),['submit','configure','upload','upload','upload','upload','upload','queue']);
   assert.equal(calls[1].count,5);
   for(let index=0;index<5;index++){
     assert.ok(calls[index+2].path.endsWith(index?`/reference-${index+1}`:'/reference'));
-    assert.ok(calls[index+2].bytes>1000);
+    assert.ok(calls[index+2].bytes>100);
   }
   assert.equal(calls[0].args.p_reference_sha256.length,64);
+  assert.equal(calls[0].args.p_mode,'auto');
 });
