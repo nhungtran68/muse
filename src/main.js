@@ -12,7 +12,7 @@ import {displayMessage} from './display-text.mjs';
 import {renderConsent} from './oauth-consent.mjs';
 import {renderGrants} from './oauth-grants.mjs';
 import {mountVideoDelivery,mountVideoOptions} from './video-delivery.mjs';
-import {normalizePhone,passwordLoginIdentifier} from './phone-auth.mjs';
+import {phoneLoginEmail,passwordLoginIdentifier} from './phone-auth.mjs';
 
 const root = document.querySelector('#app');
 const supabase = supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
@@ -43,7 +43,7 @@ function authView(mode='login') {
     event.preventDefault(); clearMessage();
     const identifier=document.querySelector('#auth-email').value.trim(),password=document.querySelector('#auth-password').value;
     if(signup&&password!==document.querySelector('#auth-confirm-password').value)return message('Hai lần nhập mật khẩu chưa khớp.','error');
-    let identity;try{identity=signup?{phone:normalizePhone(identifier)}:passwordLoginIdentifier(identifier);}catch(error){return message(error.message,'error');}
+    let identity;try{identity=signup?{email:phoneLoginEmail(identifier)}:passwordLoginIdentifier(identifier);}catch(error){return message(error.message,'error');}
     const button=event.submitter||event.currentTarget.querySelector('[type=submit]');button.disabled=true;button.textContent='Đang xử lý…';
     const result=signup?await supabase.auth.signUp({...identity,password}):await supabase.auth.signInWithPassword({...identity,password});
     if(result.error){message(result.error.message,'error');button.disabled=false;button.textContent=mode==='signup'?'Đăng ký':'Đăng nhập';return;}

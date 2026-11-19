@@ -121,13 +121,13 @@ export async function mountVideoDelivery(grid, client) {
   }));
 
   async function loadMembers() {
-    const {data,error} = await client.from('profiles').select('id,email')
-      .eq('role','member').eq('approved',true).order('email');
+    const {data,error} = await client.from('profiles').select('id,email,phone')
+      .eq('role','member').eq('approved',true).order('created_at',{ascending:false});
     if (!card.isConnected || error) return;
     const select = members.elements.member;
     const current = select.value;
     select.replaceChildren(new Option('Chọn thành viên',''),
-      ...data.map(item => new Option(item.email,item.id)));
+      ...data.map(item => new Option(item.phone||item.email||item.id,item.id)));
     if (data.some(item => item.id===current)) select.value = current;
   }
 

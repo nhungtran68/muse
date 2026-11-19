@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {chromium} from 'playwright';
 import {installedBrowserExecutable} from '../worker/muse-adapter.mjs';
-import {normalizePhone,passwordLoginIdentifier} from '../src/phone-auth.mjs';
+import {normalizePhone,phoneLoginEmail,passwordLoginIdentifier} from '../src/phone-auth.mjs';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const port=4350,api='http://127.0.0.1:4351',owner='40000000-0000-4000-8000-000000000004';
@@ -17,8 +17,9 @@ test('Vietnamese phone numbers normalize for signup and legacy email remains usa
  assert.equal(normalizePhone('0912 345 678'),'+84912345678');
  assert.equal(normalizePhone('84912345678'),'+84912345678');
  assert.equal(normalizePhone('+84 912-345-678'),'+84912345678');
+ assert.equal(phoneLoginEmail('0912 345 678'),'84912345678@phone-login.ibeetool.com');
  assert.deepEqual(passwordLoginIdentifier('Admin@Example.test'),{email:'admin@example.test'});
- assert.deepEqual(passwordLoginIdentifier('0912345678'),{phone:'+84912345678'});
+ assert.deepEqual(passwordLoginIdentifier('0912345678'),{email:'84912345678@phone-login.ibeetool.com'});
  assert.throws(()=>normalizePhone('09123'),/Số điện thoại/);
 });
 
@@ -35,11 +36,11 @@ test('signup requires matching passwords and creates a pending phone account wit
   if(request.method()==='OPTIONS')return route.fulfill(json({}));
   if(url.pathname==='/auth/v1/signup'){
    const body=request.postDataJSON();calls.push(body);
-   return route.fulfill(json({access_token:token,refresh_token:'test-refresh',token_type:'bearer',expires_in:3600,expires_at:Math.floor(Date.now()/1000)+3600,user:{id:owner,phone:body.phone,email:null,aud:'authenticated',role:'authenticated'}}));
+   return route.fulfill(json({access_token:token,refresh_token:'test-refresh',token_type:'bearer',expires_in:3600,expires_at:Math.floor(Date.now()/1000)+3600,user:{id:owner,phone:null,email:body.email,aud:'authenticated',role:'authenticated'}}));
   }
   if(url.pathname==='/auth/v1/token'){
    const body=request.postDataJSON();loginCalls.push(body);
-   return route.fulfill(json({access_token:token,refresh_token:'test-refresh',token_type:'bearer',expires_in:3600,expires_at:Math.floor(Date.now()/1000)+3600,user:{id:owner,phone:body.phone,email:null,aud:'authenticated',role:'authenticated'}}));
+   return route.fulfill(json({access_token:token,refresh_token:'test-refresh',token_type:'bearer',expires_in:3600,expires_at:Math.floor(Date.now()/1000)+3600,user:{id:owner,phone:null,email:body.email,aud:'authenticated',role:'authenticated'}}));
   }
   if(url.pathname==='/auth/v1/logout')return route.fulfill(json({}));
   if(url.pathname==='/rest/v1/profiles')return route.fulfill(json({id:owner,email:null,phone:'+84912345678',role:'member',approved:false}));
@@ -60,8 +61,8 @@ test('signup requires matching passwords and creates a pending phone account wit
  await page.locator('#auth-form button[type=submit]').click();
  await page.getByText('Tài khoản đang chờ duyệt').waitFor();
  assert.equal(calls.length,1);
- assert.equal(calls[0].phone,'+84912345678');
- assert.equal(calls[0].email,undefined);
+ assert.equal(calls[0].email,'84912345678@phone-login.ibeetool.com');
+ assert.equal(calls[0].phone,undefined);
  assert.equal(await page.locator('#create-form').count(),0);
  assert.match(await page.locator('.side-bottom').innerText(),/\+84912345678/);
  await page.locator('#signout').click();
@@ -70,6 +71,6 @@ test('signup requires matching passwords and creates a pending phone account wit
  await page.locator('#auth-form button[type=submit]').click();
  await page.getByText('Tài khoản đang chờ duyệt').waitFor();
  assert.equal(loginCalls.length,1);
- assert.equal(loginCalls[0].phone,'+84912345678');
- assert.equal(loginCalls[0].email,undefined);
+ assert.equal(loginCalls[0].email,'84912345678@phone-login.ibeetool.com');
+ assert.equal(loginCalls[0].phone,undefined);
 });

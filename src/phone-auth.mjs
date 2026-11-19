@@ -7,7 +7,13 @@ export function normalizePhone(value) {
   throw Error('Số điện thoại không hợp lệ. Hãy nhập số di động Việt Nam 10 chữ số, ví dụ 09xxxxxxxx.');
 }
 
+// Supabase's hosted phone provider requires an SMS vendor. The web keeps phone
+// as the public login name and maps it to an internal, undeliverable email ID.
+export function phoneLoginEmail(value) {
+  return `${normalizePhone(value).slice(1)}@phone-login.ibeetool.com`;
+}
+
 export function passwordLoginIdentifier(value) {
   const input=String(value||'').trim();
-  return input.includes('@')?{email:input.toLowerCase()}:{phone:normalizePhone(input)};
+  return input.includes('@')?{email:input.toLowerCase()}:{email:phoneLoginEmail(input)};
 }
