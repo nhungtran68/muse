@@ -29,11 +29,11 @@ export function validateFlexibleMedia(probe,kind){
 }
 
 export async function processSingleMediaJob(job,{client,muse,workRoot,workerId,leaseToken,videoEditEnabled=process.env.MUSE_ENABLE_VIDEO_EDIT!=='0'}){
-  const isImage=job.creation_mode==='image',kind=isImage?'image':'video';
+  const isImage=job.creation_mode==='image';
   const isVideoEdit=job.reference_kind==='video';
   if(isVideoEdit&&!videoEditEnabled)throw Object.assign(Error('Chỉnh sửa video chưa được bật trên worker này.'),{code:'VIDEO_EDIT_UNAVAILABLE',retryable:false});
   if(isVideoEdit&&(job.creation_mode!=='video_free'||!job.reference_path||!/^[a-f0-9]{64}$/.test(job.reference_sha256||'')||job.storage_provider!=='r2'||job.output_r2_selected!==true))throw Object.assign(Error('Yêu cầu chỉnh sửa thiếu video nguồn hoặc quyền lưu kết quả R2.'),{code:'INVALID_VIDEO_EDIT_JOB',retryable:false});
-  const expectedAction=isImage?'single_image_request':'single_free_video_request';
+  const expectedAction=job.creation_mode==='auto'?'single_auto_request':isImage?'single_image_request':'single_free_video_request';
   if(!job.claim_token||!workerId||!leaseToken||job.schema_version!==2||job.scene_count!==1||job.scene_seconds!==null||job.plan?.length!==1||job.plan[0]?.index!==1||job.plan[0]?.action!==expectedAction)throw Object.assign(Error('Yêu cầu tạo nội dung không hợp lệ.'),{code:'INVALID_MEDIA_JOB',retryable:false});
   const auth={p_id:job.id,p_worker:workerId,p_token:leaseToken,p_claim:job.claim_token};
   const rpc=async(name,args)=>{const r=await client.rpc(name,args);if(r.error)throw r.error;return r.data;};
@@ -85,14 +85,18 @@ export async function processSingleMediaJob(job,{client,muse,workRoot,workerId,l
   // Validate the real file; a text acknowledgement never completes a job.
   let file=output.path,bytes,format,probe;
   try{
-    bytes=await readFile(file);format=isImage?imageFormat(bytes):{extension:'mp4',contentType:'video/mp4'};
-    probe=await probeVideo(file);validateFlexibleMedia(probe,kind);
-    if(!isImage&&!bytes.subarray(0,64).includes(Buffer.from('ftyp')))throw Error('Muse chưa trả về một video MP4 hợp lệ.');
+    bytes=await readFile(file);
+    const actualKind=job.creation_mode==='auto'?(bytes.subarray(0,64).includes(Buffer.from('ftyp'))?'video':'image'):(isImage?'image':'video');
+    if(output.kind&&output.kind!==actualKind)throw Error('Loại tệp trả về không khớp với kết quả đã nhận.');
+    format=actualKind==='image'?imageFormat(bytes):{extension:'mp4',contentType:'video/mp4'};
+    probe=await probeVideo(file);validateFlexibleMedia(probe,actualKind);
+    if(actualKind==='video'&&!bytes.subarray(0,64).includes(Buffer.from('ftyp')))throw Error('Muse chưa trả về một video MP4 hợp lệ.');
+    output.kind=actualKind;
   }catch(error){
     await update({status:'error',submission_state:'not_sent',request_receipt:null,error_code:'MEDIA_INVALID',error:String(error.message).slice(0,400)});
     throw Object.assign(error,{code:'MEDIA_INVALID',retryable:true});
   }
-  if(!isImage){
+  if(output.kind==='video'){
     if(probe.codec!=='h264'){
       const playable=path.join(dir,'playable.mp4');probe=await joinScenes([file],playable,probe.duration);file=playable;bytes=await readFile(file);
     }
@@ -101,12 +105,12 @@ export async function processSingleMediaJob(job,{client,muse,workRoot,workerId,l
   const key=`${job.user_id}/${job.id}/${job.claim_token}/result.${format.extension}`;
   try{
     await uploadMedia(client,{provider:job.storage_provider,bucket:'brand-videos',path:key,jobId:job.id,origin:process.env.MUSE_MEDIA_GATEWAY_ORIGIN,contentType:format.contentType,data:bytes});
-    await rpc('complete_single_media_job',{...auth,p_path:key,p_sha256:hash(bytes),p_probe:{...probe,kind,content_type:format.contentType,duration:isImage?null:probe.duration}});
+    await rpc('complete_single_media_job',{...auth,p_path:key,p_sha256:hash(bytes),p_probe:{...probe,kind:output.kind,content_type:format.contentType,duration:output.kind==='image'?null:probe.duration}});
   }catch(error){
     await update({status:'error',error_code:'MUSE_TIMEOUT',error:'Đã nhận kết quả Muse nhưng chưa lưu xong. Có thể tiếp tục lấy kết quả cũ mà không gửi lại.'});
     throw Object.assign(error,{code:'MUSE_TIMEOUT',retryable:true});
   }
-  console.log(`Yêu cầu ${job.id} · đã lưu ${kind} hợp lệ${isImage?'':` · ${probe.duration} giây`}.`);
+  console.log(`Yêu cầu ${job.id} · đã lưu ${output.kind} hợp lệ${output.kind==='image'?'':` · ${probe.duration} giây`}.`);
   return key;
   }finally{
     if(isVideoEdit&&image)await unlink(image).catch(error=>{if(error?.code!=='ENOENT')console.warn('Chưa xóa được bản video nguồn tạm của yêu cầu.');});

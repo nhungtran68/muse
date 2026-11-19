@@ -187,6 +187,9 @@ test('media selection skips uploaded references, stays in the matching reply, an
  const adapter=new MuseAdapterV2('','');adapter.requirePage=()=>page;
  const video=await adapter.sceneResponse('KEY',{kind:'video',finalOnly:true});assert.equal(await video.video.getAttribute('data-id'),'joined');assert.equal(video.busy,true);await video.video.dispose();
  const image=await adapter.sceneResponse('KEY',{kind:'image',finalOnly:true});assert.equal(await image.video.getAttribute('data-id'),'generated');await image.video.dispose();
+ const autoVideo=await adapter.sceneResponse('KEY',{kind:'auto',finalOnly:true});assert.equal(await autoVideo.video.getAttribute('data-id'),'joined');assert.equal(autoVideo.mediaKind,'video');await autoVideo.video.dispose();
+ await page.locator('[data-id="clip"],[data-id="joined"]').evaluateAll(nodes=>nodes.forEach(node=>node.remove()));
+ const autoImage=await adapter.sceneResponse('KEY',{kind:'auto',finalOnly:true});assert.equal(await autoImage.video.getAttribute('data-id'),'generated');assert.equal(autoImage.mediaKind,'image');await autoImage.video.dispose();
  await page.locator('[data-id="generated"]').evaluate(node=>node.remove());
  const noImage=await adapter.sceneResponse('KEY',{kind:'image',finalOnly:true});assert.equal(noImage.video,null,'an uploaded reference is never returned as the generated image');
 });
@@ -197,6 +200,21 @@ test('an image result downloads its rendered resource without opening the incomp
  const adapter=new MuseAdapterV2('',directory);adapter.requirePage=()=>({});
  const handle={evaluate:async()=>({url:'data:image/png;base64,'+bytes.toString('base64'),width:1,height:1}),click:async()=>assert.fail('Do not open the image viewer when the result resource is available')};
  const result=await adapter.downloadImage('image-result',handle);assert.match(result.path,/\.png$/);assert.deepEqual(await readFile(result.path),bytes);
+});
+
+test('an open request sends the original prompt once and accepts an image result',async()=>{
+ const {adapter}=fixture(),job={id:'12345678-1234-1234-1234-123456789abc',schema_version:2,creation_mode:'auto',scene_count:1,scene_seconds:null,content:'Vẽ một vườn nho màu nước.'};
+ const scene={index:1,generation:0,prompt:job.content,action:'single_auto_request'};
+ let draft='',sends=0,downloads=0,reads=0;
+ adapter.cleanComposer=async()=>({fill:async text=>{draft=text;},inputValue:async()=>draft,press:async()=>{sends++;}});
+ adapter.sceneResponse=async(_key,options)=>{assert.equal(options.kind,'auto');return ++reads===1?{requested:false,video:null}:{requested:true,busy:false,mediaIdentity:'image-result',mediaKind:'image',video:{dispose:async()=>{}}};};
+ adapter.assertConnected=async()=>{};adapter.downloadImage=async()=>{downloads++;return {path:'result.png'};};
+ adapter.downloadScene=async()=>assert.fail('An image must not use video download');
+ adapter.pollMs=1;adapter.mediaSettleMs=0;adapter.flexibleTimeoutMs=1000;
+ const result=await adapter.generateSceneV2(job,scene,null,{onBeforeSend:async()=>{},onSubmitted:async()=>{}});
+ assert.deepEqual(result,{path:'result.png',kind:'image'});assert.equal(sends,1);assert.equal(downloads,1);
+ assert.match(draft,/^BRAND_[A-Za-z0-9_]+\.\nVẽ một vườn nho màu nước\.$/);
+ assert.doesNotMatch(draft,/10 giây|9:16|một video|một ảnh/i);
 });
 
 test('a new single video request persists the Muse receipt before sending and marks it sent after acknowledgement',async()=>{
